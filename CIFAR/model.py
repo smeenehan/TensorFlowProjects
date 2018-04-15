@@ -33,16 +33,13 @@ class ResNet(tf.keras.Model):
             name='conv_init')
 
         self.num_stages = num_stages
-        self.stages = {}
         output_channels = 2*init_channels
         for idx in range(self.num_stages):
             stage = str(idx)
-            self.stages['layer'+stage+'a'] = ResBlock(
-                output_channels, data_format, stage, 'a')
-            self.stages['layer'+stage+'b'] = ResBlock(
-                output_channels, data_format, stage, 'b')
-            self.stages['layer'+stage+'c'] = ResBlock(
-                output_channels, data_format, stage, 'c')
+            self.layers.append(ResBlock(output_channels, data_format, stage, 'a'))
+            self.layers.append(ResBlock(output_channels, data_format, stage, 'b'))
+            self.layers.append(ResBlock(output_channels, data_format, stage, 'c'))
+
             output_channels *= 2
 
         reduction_indices = [2, 3] if data_format is 'channels_first' else [1, 2]
@@ -55,14 +52,8 @@ class ResNet(tf.keras.Model):
     def call(self, input_data, training=False):
         x = self.conv_init(input_data)
 
-        for idx in range(self.num_stages):
-            stage = str(idx)
-            block = self.stages['layer'+stage+'a']
-            x = block(x, training=training)
-            block = self.stages['layer'+stage+'b']
-            x = block(x, training=training)
-            block = self.stages['layer'+stage+'c']
-            x = block(x, training=training)
+        for layer in self.layers[1:3*self.num_stages+1]:
+            x = layer(x, training=training)
 
         x = self.global_pool(x)
         return self.fc(self.flatten(x))
@@ -109,7 +100,7 @@ class ResBlock(tf.keras.Model):
 
         self.bn2 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'2')
         self.conv2 = tf.keras.layers.Conv2D(mid_channels, (3, 3), name=conv_name+'2', 
-                                   data_format=data_format)
+                                   padding='same', data_format=data_format)
 
         self.bn3 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'3')
         self.conv3 = tf.keras.layers.Conv2D(output_channels, (1, 1), name=conv_name+'3', 
@@ -124,13 +115,13 @@ class ResBlock(tf.keras.Model):
         x = tf.nn.relu(x)
         x = self.conv1(x)
 
-        x = self.bn1(x, training=training)
+        x = self.bn2(x, training=training)
         x = tf.nn.relu(x)
-        x = self.conv1(x)
+        x = self.conv2(x)
 
-        x = self.bn1(x, training=training)
+        x = self.bn3(x, training=training)
         x = tf.nn.relu(x)
-        x = self.conv1(x)
+        x = self.conv3(x)
 
         if self.first_block:
             shortcut = self.conv0(input_data)

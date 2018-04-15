@@ -17,7 +17,7 @@ def get_CIFAR10_data(data_format, num_val=1000):
     """
     (x_training, y_training), (x_test, y_test) = cifar10.load_data()
 
-    x_test = x_test.astype('float')
+    x_test = x_test.astype('float32')
     x_test_raw = x_test.copy()
 
     # Optimize channel ordering for CPU/GPU
@@ -29,8 +29,8 @@ def get_CIFAR10_data(data_format, num_val=1000):
     num_train = y_training.shape[0]-num_val
     train_mask = range(num_train)
     val_mask = range(num_train, num_train+num_val)
-    x_train, y_train = x_training[train_mask].astype('float'), y_training[train_mask]
-    x_val, y_val = x_training[val_mask].astype('float'), y_training[val_mask]
+    x_train, y_train = x_training[train_mask].astype('float32'), y_training[train_mask]
+    x_val, y_val = x_training[val_mask].astype('float32'), y_training[val_mask]
 
     # Normalize data
     mean_image = np.mean(x_train, axis=0)
