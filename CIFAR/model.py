@@ -1,6 +1,69 @@
 import functools
 import tensorflow as tf
 
+def res_block_layer(output_channels, data_format, stage, block):
+        mid_channels = output_channels//2
+        bn_axis = 1 if data_format is 'channels_first' else 3
+        bn_name = 'bn'+stage+block+'_'
+        conv_name = 'conv'+stage+block+'_'
+        first_block = block is 'a'
+        strides = (2, 2) if first_block else (1, 1)
+
+        def layer(input_data, training=False):
+            x = tf.layers.batch_normalization(
+                input_data, axis=bn_axis, training=training, name=bn_name+'1')
+            x = tf.nn.relu(x)
+            x = tf.layers.conv2d(x, mid_channels, (1, 1), strides=strides,
+                                 name=conv_name+'1', data_format=data_format)
+
+            x = tf.layers.batch_normalization(
+                x, axis=bn_axis, training=training, name=bn_name+'2')
+            x = tf.nn.relu(x)
+            x = tf.layers.conv2d(x, mid_channels, (3, 3), name=conv_name+'2', 
+                                 data_format=data_format, padding='same')
+
+            x = tf.layers.batch_normalization(
+                x, axis=bn_axis, training=training, name=bn_name+'3')
+            x = tf.nn.relu(x)
+            x = tf.layers.conv2d(x, output_channels, (1, 1), name=conv_name+'3',
+                                 data_format=data_format)
+
+            if first_block:
+                shortcut = tf.layers.conv2d(input_data, output_channels, (1, 1),
+                                            strides=strides, name=conv_name+'0',
+                                            data_format=data_format)
+            else:
+                shortcut = input_data
+            return x+shortcut
+
+        return layer
+
+
+def res_net_layers(data_format, init_channels=16, num_stages=3, classes=10):
+    def model(input_data, training=False):
+        x = tf.layers.conv2d(input_data, init_channels, (3, 3), padding='same',
+                             data_format=data_format, name='conv_init')
+
+        output_channels = 2*init_channels
+        for idx in range(num_stages):
+            stage = str(idx)
+            layer = res_block_layer(output_channels, data_format, stage, 'a')
+            x = layer(x, training=training)
+            layer = res_block_layer(output_channels, data_format, stage, 'b')
+            x = layer(x, training=training)
+            layer = res_block_layer(output_channels, data_format, stage, 'c')
+            x = layer(x, training=training)
+            output_channels *= 2
+
+        reduction_indices = [2, 3] if data_format is 'channels_first' else [1, 2]
+        x = tf.reduce_mean(x, reduction_indices=reduction_indices, keepdims=False)
+        x = tf.layers.flatten(x, name='flatten')
+        logits = tf.layers.dense(x, classes, name='fc')
+        return logits
+
+    return model
+
+
 class ResNet(tf.keras.Model):
     """Implement a wide ResNet-style architecture.
 
