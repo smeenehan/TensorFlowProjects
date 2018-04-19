@@ -18,7 +18,8 @@ def get_CIFAR10_data(data_format, batch_size=64, shuffle=1000, num_val=1000):
     """
     (x_training, y_training), (x_test, y_test) = cifar10.load_data()
 
-    x_test = x_test.astype('float32')
+    x_training, x_test = x_training.astype('float32'), x_test.astype('float32')
+    y_training, y_test = y_training.astype('int32'), y_test.astype('int32')
     x_test_raw = x_test.copy()
 
     # Optimize channel ordering for CPU/GPU
