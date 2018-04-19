@@ -45,7 +45,7 @@ class ResNet(tf.keras.Model):
         reduction_indices = [2, 3] if data_format is 'channels_first' else [1, 2]
         reduction_indices = tf.constant(reduction_indices)
         self.global_pool = functools.partial(tf.reduce_mean,
-            reduction_indices=reduction_indices, keep_dims=False)
+            reduction_indices=reduction_indices, keepdims=False)
         self.flatten = tf.keras.layers.Flatten()
         self.fc = tf.keras.layers.Dense(classes, name='fc')
 
