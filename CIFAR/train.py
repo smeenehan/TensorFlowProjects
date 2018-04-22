@@ -2,9 +2,6 @@ import tensorflow as tf
 import tensorflow.contrib.eager as tfe
 import time
 
-def data_spec(dataset):
-    return (dataset.output_types, dataset.output_shapes)
-
 class ModelTrainer(object):
     """Organize training of a TensorFlow model.
 
@@ -26,30 +23,31 @@ class ModelTrainer(object):
 
     Parameters
     ----------
-    data_spec : tuple
-        Tuple of data types and shapes served by the Datasets used for training
-        and evaluation. Used in graph execution to define input placeholders. 
-        Defaults to None.
-
-    Raises
-    ------
-    ValueError
-        If data_spec is not specified in graph execution mode.
+    train_data : dataset
+        Training data and labels. Should conform to the TensorFlow dataset
+        API and return tuples of (features, labels) upon iteration.
+    val_data : dataset
+        Validation data and labels.
+    test_data : dataset
+        Testing data and labels.
     """
-    def __init__(self, model, loss, optimizer, data_spec=None):
+    def __init__(self, model, loss, optimizer, train_data, val_data, test_data):
         self.model = model
+        self.data = {'train': train_data, 'val': val_data, 'test': test_data}
         if tf.executing_eagerly():
             self.loss = loss
             self.optimizer = optimizer
         else:
-            if data_spec is None:
-                raise ValueError('Must specify data spec in graph mode')
-            self._setup_graph_training(loss, optimizer, data_spec)
+            self._setup_graph_training(loss, optimizer)
         self.step_counter = tf.train.get_or_create_global_step()
 
-    def _setup_graph_training(self, loss, optimizer, data_spec):
-        data_types, data_shapes = data_spec
+    def _setup_graph_training(self, loss, optimizer):
+        data_types, data_shapes = self.data['train'].output_types, \
+                                  self.data['train'].output_shapes
         self._iterator = tf.data.Iterator.from_structure(data_types, data_shapes)
+        self._inits = {'train': self._iterator.make_initializer(self.data['train']),
+                       'val': self._iterator.make_initializer(self.data['val']),
+                       'test': self._iterator.make_initializer(self.data['test'])}
         features, labels = self._iterator.get_next()
         training = tf.placeholder(tf.bool, name='training')
 
@@ -61,92 +59,84 @@ class ModelTrainer(object):
             self.optimizer = optimizer.minimize(self.loss)
 
 
-    def train(self, train_data, num_epochs=1, val_data=None):
+    def train(self, num_epochs=1, verbose=True):
         """Train the model, and log training statistics.
 
         Parameters
         ----------
-        train_data : dataset
-            Training data and labels. Should conform to the TensorFlow dataset
-            API and return tuples of (features, labels) upon iteration.
         num_epochs : int
             Number of epochs to train for. Defaults to 1.
-        val_data : dataset
-            Validation data and labels. If present, validation loss is computed 
-            at the beginning of training and after each epoch. Defaults to None.
         """
         for idx in range(num_epochs):
             start = time.time()
             if tf.executing_eagerly():
-                self._train_eager_one_epoch(train_data)
+                self._train_eager_one_epoch()
             else:
-                self._train_graph_one_epoch(train_data)
+                self._train_graph_one_epoch()
             end = time.time()
-            print('\nTrain time for epoch #%d: %f' % (idx+1,end - start))
-            if val_data is not None:
-                val_loss = self.eval(val_data)
+            val_loss = self.evaluate('val')
+            if verbose:
+                print('\nTrain time for epoch #%d: %f' % (idx+1,end - start))
                 print('\nValidation loss for epoch #%d: %f' % (idx+1,val_loss))
 
-    def _train_eager_one_epoch(self, train_data):
-        for (batch, (features, labels)) in enumerate(tfe.Iterator(train_data)):
+    def _train_eager_one_epoch(self):
+        for (batch, (features, labels)) in enumerate(tfe.Iterator(self.data['train'])):
             with tfe.GradientTape() as tape:
                 logits = self.model(features, training=True)
                 train_loss = self.loss(labels, logits)
             grads = tape.gradient(train_loss, self.model.variables)
             self.optimizer.apply_gradients(zip(grads, self.model.variables), 
                                            global_step=self.step_counter)
-            if batch % 50 == 0:
-                print('Step #%d \tLoss: %.6f' % (batch, train_loss))
 
-    def _train_graph_one_epoch(self, train_data):
+    def _train_graph_one_epoch(self):
         sess = tf.get_default_session()
-        train_init = self._iterator.make_initializer(train_data)
-
-        sess.run(train_init)
+        sess.run(self._inits['train'])
         train_ops = [self.loss, self.optimizer]
-        batch = 0
         while True:
             try:
                 train_loss, _ = sess.run(
                     train_ops, feed_dict={'training:0': True})
-                if batch % 50 == 0:
-                    print('Step #%d \tLoss: %.6f' % (batch, train_loss))
-                batch += 1
             except tf.errors.OutOfRangeError:
                 break
 
-    def eval(self, data):
-        """Evaluate training loss on a dataset.
+    def evaluate(self, data_name):
+        """Evaluate training loss on as specified dataset.
 
         Parameters
         ----------
-        data : dataset
-            Training data and labels. Should conform to the TensorFlow dataset
-            API and return tuples of (features, labels) upon iteration.
+        data_name : string
+            Name of the data set ('train', 'val', or 'test') on which we wish to
+            evaluate the model
 
         Returns
         -------
         float
             Average loss over the full dataset.
+
+        Raises
+        ------
+        ValueError
+            If data_name is not valid.
         """
-        if tf.executing_eagerly(): 
-            loss = self._eval_eager(data)
+        if data_name not in self.data.keys():
+            raise ValueError('data_name must be one of: ', self.data.keys())
+
+        if tf.executing_eagerly():
+            loss = self._evaluate_eager(data_name)
         else:
-            loss = self._eval_graph(data)
+            loss = self._evaluate_graph(data_name)
         return loss
 
-    def _eval_eager(self, data):
+    def _evaluate_eager(self, data_name):
         avg_loss = tfe.metrics.Mean('loss')
-        for (features, labels) in tfe.Iterator(data):
+        for (features, labels) in tfe.Iterator(self.data[data_name]):
             logits = self.model(features, training=False)
             avg_loss(self.loss(labels, logits))
         return avg_loss.result()
 
-    def _eval_graph(self, data):
+    def _evaluate_graph(self, data_name):
         sess = tf.get_default_session()
-        data_init = self._iterator.make_initializer(data)
-
-        sess.run(data_init)
+        sess.run(self._inits[data_name])
         avg_loss, cnt = 0, 0
         while True:
             try:
