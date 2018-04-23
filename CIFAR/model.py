@@ -1,6 +1,12 @@
 import functools
 import tensorflow as tf
 
+def compute_accuracy(labels, logits):
+    predictions = tf.argmax(logits, axis=1, output_type=tf.int32)
+    labels = tf.cast(tf.squeeze(labels), tf.int32)
+    equality = tf.equal(labels, predictions)
+    return tf.reduce_mean(tf.cast(equality, dtype=tf.float32))
+
 class ResNet(tf.keras.Model):
     """Implement a wide ResNet-style architecture.
 
