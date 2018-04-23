@@ -35,12 +35,14 @@ class ModelTrainer(object):
         Testing data and labels.
     """
     def __init__(self, model, accuracy, loss, optimizer, train_data, val_data, 
-                 test_data, summary_dir='summaries', summary_name=''):
+                 test_data, summary_dir='summaries'):
         self.model = model
         self.data = {'train': train_data, 'val': val_data, 'test': test_data}
         self.step_counter = tf.train.get_or_create_global_step()
         self.summary = summary.create_file_writer(
-            summary_dir, flush_millis=10000, filename_suffix=summary_name)
+            summary_dir+'/train', flush_millis=10000, name='train_summ')
+        self.test_summary = summary.create_file_writer(
+            summary_dir+'/test', flush_millis=10000, name='val_summ')
         if tf.executing_eagerly():
             self.loss = loss
             self.accuracy = accuracy
@@ -62,13 +64,13 @@ class ModelTrainer(object):
         self.accuracy = accuracy(labels, self.logits)
         self.loss = loss(labels, self.logits)
         with self.summary.as_default(), summary.always_record_summaries():
-            self._summary_ops = {
-            'train_loss': summary.scalar('train_loss', self.loss),
-            'train_accuracy': summary.scalar('train_accuracy', self.accuracy),
-            'val_loss': summary.scalar('val_loss',
-                                       tf.placeholder(tf.float32, name='avg_loss')),
-            'val_accuracy': summary.scalar('val_accuracy', 
-                                           tf.placeholder(tf.float32, name='avg_accuracy'))}
+            summary.scalar('train_loss', self.loss)
+            summary.scalar('train_accuracy', self.accuracy)
+        with self.test_summary.as_default(), summary.always_record_summaries():
+            summary.scalar(
+                'val_loss', tf.placeholder(tf.float32, name='avg_loss'))
+            summary.scalar(
+                'val_accuracy',  tf.placeholder(tf.float32, name='avg_accuracy'))
         # Needed for BatchNorm to work
         extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(extra_update_ops):
@@ -84,26 +86,27 @@ class ModelTrainer(object):
         num_epochs : int
             Number of epochs to train for. Defaults to 1.
         """
-        with self.summary.as_default(), summary.always_record_summaries():
+        with self.test_summary.as_default(), summary.always_record_summaries():
             tf.contrib.summary.initialize()
-            print()
             val_loss, val_accuracy = self.evaluate('val')
             if verbose:
                  print('\nInitial validation loss, accuracy: %f, %f' % 
                       (val_loss, val_accuracy))
 
-            for idx in range(num_epochs):
+        for idx in range(num_epochs):
+            with self.summary.as_default(), summary.always_record_summaries():
                 start = time.time()
                 if tf.executing_eagerly():
                     self._train_eager_one_epoch()
                 else:
                     self._train_graph_one_epoch()
                 end = time.time()
+            with self.test_summary.as_default(), summary.always_record_summaries():
                 val_loss, val_accuracy = self.evaluate('val')
-                if verbose:
-                    print('\nTrain time for epoch #%d: %f' % (idx+1,end - start))
-                    print('\nValidation loss, accuracy for epoch #%d: %f, %f' % 
-                          (idx+1,val_loss, val_accuracy))
+            if verbose:
+                print('\nTrain time for epoch #%d: %f' % (idx+1,end - start))
+                print('\nValidation loss, accuracy for epoch #%d: %f, %f' % 
+                      (idx+1,val_loss, val_accuracy))
 
     def _train_eager_one_epoch(self):
         for (batch, (features, labels)) in enumerate(tfe.Iterator(self.data['train'])):
@@ -114,15 +117,15 @@ class ModelTrainer(object):
             grads = tape.gradient(train_loss, self.model.variables)
             self.optimizer.apply_gradients(zip(grads, self.model.variables), 
                                            global_step=self.step_counter)
-            summary.scalar('train_loss', train_loss)
-            summary.scalar('train_accuracy', train_accuracy)
+            summary.scalar('loss', train_loss)
+            summary.scalar('accuracy', train_accuracy)
 
     def _train_graph_one_epoch(self):
         sess = tf.get_default_session()
         sess.run(self._inits['train'])
-        train_ops = [self.loss, self.accuracy, self.optimizer,
-                     self._summary_ops['train_loss'], 
-                     self._summary_ops['train_accuracy']],
+        train_ops = [self.loss, self.accuracy, self.optimizer, 
+                     tf.get_default_graph().get_operation_by_name('train_loss'),
+                     tf.get_default_graph().get_operation_by_name('train_accuracy')]
         while True:
             try:
                 sess.run(train_ops, feed_dict={'training:0': True})
@@ -158,15 +161,14 @@ class ModelTrainer(object):
 
     def _evaluate_eager(self, data_name):
         loss_metric = tfe.metrics.Mean('loss')
-        accuracy_metric = tfe.metrics.Mean('loss')
+        accuracy_metric = tfe.metrics.Mean('accuracy')
         for (features, labels) in tfe.Iterator(self.data[data_name]):
             logits = self.model(features, training=False)
             loss_metric(self.loss(labels, logits))
             accuracy_metric(self.accuracy(labels, logits))
         avg_loss, avg_accuracy = loss_metric.result(), accuracy_metric.result()
-        if data_name is 'val':
-            summary.scalar('val_loss', avg_loss)
-            summary.scalar('val_accuracy', avg_accuracy)
+        summary.scalar('loss', avg_loss)
+        summary.scalar('accuracy', avg_accuracy)
         return avg_loss, avg_accuracy
 
     def _evaluate_graph(self, data_name):
@@ -177,16 +179,16 @@ class ModelTrainer(object):
         while True:
             try:
                 loss, accuracy = sess.run(eval_ops, 
-                                              feed_dict={'training:0': False})
+                                          feed_dict={'training:0': False})
                 loss_metric += loss
                 accuracy_metric += accuracy
                 cnt += 1
             except tf.errors.OutOfRangeError:
                 break
         avg_loss, avg_accuracy = loss_metric/cnt, accuracy_metric/cnt
-        if data_name is 'val':
-            sess.run([self._summary_ops['val_loss'], 
-                      self._summary_ops['val_accuracy']],
-                     feed_dict={'avg_loss:0': avg_loss, 
-                                'avg_accuracy:0': avg_accuracy})
+        sess.run(self._inits[data_name])
+        summary_ops = [tf.get_default_graph().get_operation_by_name('val_loss'),
+                       tf.get_default_graph().get_operation_by_name('val_accuracy')]
+        sess.run(summary_ops, feed_dict={'avg_loss:0': avg_loss, 
+                                         'avg_accuracy:0': avg_accuracy})
         return avg_loss, avg_accuracy
