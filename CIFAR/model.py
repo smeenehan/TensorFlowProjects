@@ -3,9 +3,61 @@ import tensorflow as tf
 
 def compute_accuracy(labels, logits):
     predictions = tf.argmax(logits, axis=1, output_type=tf.int32)
-    labels = tf.cast(tf.squeeze(labels), tf.int32)
     equality = tf.equal(labels, predictions)
     return tf.reduce_mean(tf.cast(equality, dtype=tf.float32))
+
+def model_fn(features, labels, mode, params):
+    """Model function for use with a TensorFlow Estimator, implementing a 
+    ResNet-style classifier trained with Adam and L2 regularization.
+
+    Parameters
+    ----------
+    features : Tensor or dictionary
+        Feature or dictionary mapping names to feature Tensors.
+    labels : Tensor or dictionary
+        Label for the feature, or dictionary mapping names to label Tensors.
+    mode : string
+        ModeKey specifying whether we are in training/evaluation/prediction mode.
+    params : dictionary
+        Hyperparameters for the model.
+
+    Returns
+    -------
+    EstimatorSpec
+    """
+    model = ResNet(params['data_format'], 
+                   regularizer=tf.keras.regularizers.l2(l=params['reg_scale']))
+    image = features
+    if isinstance(image, dict):
+        image = features['image']
+
+    training = mode is tf.estimator.ModeKeys.TRAIN
+    logits = model(image, training=training)
+    classes = tf.argmax(logits, axis=1, output_type=tf.int32)
+
+    if mode is tf.estimator.ModeKeys.PREDICT:
+        predictions = {'classes': classes, 'probabilities': tf.nn.softmax(logits)}
+        return tf.estimator.EstimatorSpec(
+            mode=mode, predictions=predictions)
+
+    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits) \
+          +tf.losses.get_regularization_loss() 
+    accuracy = tf.metrics.accuracy(labels=labels, predictions=classes, name='acc_op')
+
+    tf.summary.scalar('loss', loss)
+    tf.summary.scalar('accuracy', accuracy[1])
+
+    if mode is tf.estimator.ModeKeys.EVAL:
+        return tf.estimator.EstimatorSpec(mode=mode, loss=loss, 
+                                          eval_metric_ops={'accuracy': accuracy})
+
+    optimizer = tf.train.AdamOptimizer(learning_rate=params['learning_rate'])
+    extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(extra_update_ops):
+        train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
+
+    return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
+
 
 class ResNet(tf.keras.Model):
     """Implement a wide ResNet-style architecture.
@@ -31,20 +83,27 @@ class ResNet(tf.keras.Model):
         Defaults to 3.
     classes : int
         Number of classes. Defaults to 10.
+    regularizer : function
+        Regularizer function applied to all weights in the network. Defaults to
+        None.
     """
-    def __init__(self, data_format, init_channels=16, num_stages=3, classes=10):
+    def __init__(self, data_format, init_channels=16, num_stages=3, classes=10,
+                 regularizer=None):
         super().__init__()
         self.conv_init = tf.keras.layers.Conv2D(
             init_channels, (3, 3), data_format=data_format, padding='same', 
-            name='conv_init')
+            name='conv_init', kernel_regularizer=regularizer)
 
         self.num_stages = num_stages
         output_channels = 2*init_channels
         for idx in range(self.num_stages):
             stage = str(idx)
-            self.layers.append(ResBlock(output_channels, data_format, stage, 'a'))
-            self.layers.append(ResBlock(output_channels, data_format, stage, 'b'))
-            self.layers.append(ResBlock(output_channels, data_format, stage, 'c'))
+            self.layers.append(ResBlock(output_channels, data_format, 
+                                        stage, 'a', regularizer=regularizer))
+            self.layers.append(ResBlock(output_channels, data_format, 
+                                        stage, 'b', regularizer=regularizer))
+            self.layers.append(ResBlock(output_channels, data_format, 
+                                        stage, 'c', regularizer=regularizer))
 
             output_channels *= 2
 
@@ -53,7 +112,8 @@ class ResNet(tf.keras.Model):
         self.global_pool = functools.partial(tf.reduce_mean,
             reduction_indices=reduction_indices, keepdims=False)
         self.flatten = tf.keras.layers.Flatten()
-        self.fc = tf.keras.layers.Dense(classes, name='fc')
+        self.fc = tf.keras.layers.Dense(classes, name='fc', 
+                                        kernel_regularizer=regularizer)
 
     def call(self, input_data, training=False):
         x = self.conv_init(input_data)
@@ -89,8 +149,11 @@ class ResBlock(tf.keras.Model):
     block : string
         Name of the block within the stage. The first block is expected to be
         named 'a', which will cause us to downsample the input by 2.
+    regularizer : function
+        Regularizer function applied to all weights in the network. Defaults to
+        None.
     """
-    def __init__(self, output_channels, data_format, stage, block):
+    def __init__(self, output_channels, data_format, stage, block, regularizer=None):
         super().__init__()
         mid_channels = output_channels//2
         bn_axis = 1 if data_format is 'channels_first' else 3
@@ -102,19 +165,23 @@ class ResBlock(tf.keras.Model):
 
         self.bn1 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'1')
         self.conv1 = tf.keras.layers.Conv2D(mid_channels, (1, 1), strides=strides, 
-                                   name=conv_name+'1', data_format=data_format)
+                                   name=conv_name+'1', data_format=data_format,
+                                   kernel_regularizer=regularizer)
 
         self.bn2 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'2')
         self.conv2 = tf.keras.layers.Conv2D(mid_channels, (3, 3), name=conv_name+'2', 
-                                   padding='same', data_format=data_format)
+                                   padding='same', data_format=data_format,
+                                   kernel_regularizer=regularizer)
 
         self.bn3 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'3')
         self.conv3 = tf.keras.layers.Conv2D(output_channels, (1, 1), name=conv_name+'3', 
-                                   data_format=data_format)
+                                   data_format=data_format,
+                                   kernel_regularizer=regularizer)
 
         if self.first_block:
             self.conv0 = tf.keras.layers.Conv2D(output_channels, (1, 1),
-                strides=strides, name=conv_name+'0', data_format=data_format)
+                strides=strides, name=conv_name+'0', data_format=data_format,
+                kernel_regularizer=regularizer)
 
     def call(self, input_data, training=False):
         x = self.bn1(input_data, training=training)

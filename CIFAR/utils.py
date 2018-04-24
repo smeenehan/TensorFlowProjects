@@ -12,14 +12,32 @@ def device_and_data_format():
                                       else ('/cpu:0', 'channels_last')
 
 def get_CIFAR10_data(data_format, batch_size=64, shuffle=1000, num_val=1000):
-    """
-    Load the CIFAR-10 dataset, separate training set into training/validation,
+    """Load the CIFAR-10 dataset, separate training set into training/validation,
     and pre-process the data while keeping the raw test-data for display. 
+
+    Parameters
+    ----------
+    data_format : string
+        Whether to Should be 'channels_first' or 'channels_last'
+    batch_size : int
+        Minibatch size for SGD. Defaults to 64.
+    shuffle : int
+        Size of the shuffle buffer when sampling mini-batches. Defaults to 1000.
+    num_val : int
+        Number of training images to use as a validation set. Defaults to 1000.
+
+    Returns
+    -------
+    Dataset
+        Training, validation, and test datasets
+    Array
+        Raw, unprocessed test images as a NumPy array.
     """
     (x_training, y_training), (x_test, y_test) = cifar10.load_data()
 
     x_training, x_test = x_training.astype('float32'), x_test.astype('float32')
-    y_training, y_test = y_training.astype('int32'), y_test.astype('int32')
+    y_training = np.squeeze(y_training).astype('int32')
+    y_test = np.squeeze(y_test).astype('int32')
     x_test_raw = x_test.copy()
 
     # Optimize channel ordering for CPU/GPU
@@ -31,8 +49,8 @@ def get_CIFAR10_data(data_format, batch_size=64, shuffle=1000, num_val=1000):
     num_train = y_training.shape[0]-num_val
     train_mask = range(num_train)
     val_mask = range(num_train, num_train+num_val)
-    x_train, y_train = x_training[train_mask].astype('float32'), y_training[train_mask]
-    x_val, y_val = x_training[val_mask].astype('float32'), y_training[val_mask]
+    x_train, y_train = x_training[train_mask], y_training[train_mask]
+    x_val, y_val = x_training[val_mask], y_training[val_mask]
 
     # Normalization pre-processing
     mean_image = np.mean(x_train, axis=0)
