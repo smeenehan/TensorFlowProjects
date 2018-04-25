@@ -33,6 +33,37 @@ def get_CIFAR10_data(data_format, batch_size=64, shuffle=1000, num_val=1000):
     Array
         Raw, unprocessed test images as a NumPy array.
     """
+    train, val, test, x_test_raw = load_CIFAR10_data(data_format, num_val=num_val)
+
+    # Normalization pre-processing
+    mean_image = np.mean(train[0], axis=0)
+    def normalize(features, labels):
+        return features-mean_image, labels
+
+    train_data = make_generator_dataset(train[0], train[1], batch_size, 
+                                        shuffle=shuffle, preprocess_fn=normalize)
+    val_data = make_generator_dataset(val[0], val[1], batch_size, 
+                                      preprocess_fn=normalize)
+    test_data = make_generator_dataset(test[0], test[1], batch_size, 
+                                       preprocess_fn=normalize)
+
+    return train_data, val_data, test_data, x_test_raw
+
+def load_CIFAR10_data(data_format, num_val=1000):
+    """Load the CIFAR-10 from disk, separating validation and training data
+
+    Parameters
+    ----------
+    data_format : string
+        Whether to Should be 'channels_first' or 'channels_last'
+    num_val : int
+        Number of training images to use as a validation set. Defaults to 1000.
+
+    Returns
+    -------
+    Arrays
+        (x_train, y_train), (x_val, y_val), (x_test, y_test), x_test_raw
+    """
     (x_training, y_training), (x_test, y_test) = cifar10.load_data()
 
     x_training, x_test = x_training.astype('float32'), x_test.astype('float32')
@@ -52,23 +83,16 @@ def get_CIFAR10_data(data_format, batch_size=64, shuffle=1000, num_val=1000):
     x_train, y_train = x_training[train_mask], y_training[train_mask]
     x_val, y_val = x_training[val_mask], y_training[val_mask]
 
-    # Normalization pre-processing
-    mean_image = np.mean(x_train, axis=0)
-    def normalize(features, labels):
-        return features-mean_image, labels
+    return (x_train, y_train), (x_val, y_val), (x_test, y_test), x_test_raw
 
-    train_data = make_tensor_dataset(x_train, y_train, batch_size, 
-                                     shuffle=shuffle, preprocess_fn=normalize)
-    val_data = make_tensor_dataset(x_val, y_val, batch_size, 
-                                   preprocess_fn=normalize)
-    test_data = make_tensor_dataset(x_test, y_test, batch_size, 
-                                    preprocess_fn=normalize)
+def make_generator_dataset(features, labels, batch_size, shuffle=None, 
+                           preprocess_fn=None):
+    def gen():
+        for image, label in zip(features, labels):
+            yield image, label
 
-    return train_data, val_data, test_data, x_test_raw
-
-def make_tensor_dataset(features, labels, batch_size, shuffle=None, 
-                        preprocess_fn=None):
-    data = tf.data.Dataset.from_tensor_slices((features, labels))
+    data = tf.data.Dataset.from_generator(gen, (tf.float32, tf.int32),
+                                          (features[0,:].shape, labels[0].shape))
     data = data.batch(batch_size)
     if shuffle is not None:
        data = data.shuffle(buffer_size=shuffle)

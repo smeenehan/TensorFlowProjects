@@ -1,3 +1,4 @@
+from custom_session_run_hooks import CustomCheckpointSaverHook
 import functools
 import tensorflow as tf
 
@@ -6,7 +7,7 @@ def compute_accuracy(labels, logits):
     equality = tf.equal(labels, predictions)
     return tf.reduce_mean(tf.cast(equality, dtype=tf.float32))
 
-def model_fn(features, labels, mode, params):
+def model_fn(features, labels, mode, params, config):
     """Model function for use with a TensorFlow Estimator, implementing a 
     ResNet-style classifier trained with Adam and L2 regularization.
 
@@ -20,6 +21,9 @@ def model_fn(features, labels, mode, params):
         ModeKey specifying whether we are in training/evaluation/prediction mode.
     params : dictionary
         Hyperparameters for the model.
+    config : config object
+        Runtime configuration of the Estimator calling us. Used to set up custom
+        saver hooks
 
     Returns
     -------
@@ -33,30 +37,42 @@ def model_fn(features, labels, mode, params):
 
     training = mode is tf.estimator.ModeKeys.TRAIN
     logits = model(image, training=training)
-    classes = tf.argmax(logits, axis=1, output_type=tf.int32)
+    classes = tf.argmax(logits, axis=1, output_type=tf.int32, name='predictions')
 
     if mode is tf.estimator.ModeKeys.PREDICT:
         predictions = {'classes': classes, 'probabilities': tf.nn.softmax(logits)}
         return tf.estimator.EstimatorSpec(
             mode=mode, predictions=predictions)
 
-    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits) \
-          +tf.losses.get_regularization_loss() 
-    accuracy = tf.metrics.accuracy(labels=labels, predictions=classes, name='acc_op')
-
+    with tf.name_scope('loss_op'):
+        loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits) \
+              +tf.losses.get_regularization_loss()
     tf.summary.scalar('loss', loss)
+
+    accuracy = tf.metrics.accuracy(labels=labels, 
+                                   predictions=classes, name='accuracy_op')
     tf.summary.scalar('accuracy', accuracy[1])
 
     if mode is tf.estimator.ModeKeys.EVAL:
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, 
                                           eval_metric_ops={'accuracy': accuracy})
 
-    optimizer = tf.train.AdamOptimizer(learning_rate=params['learning_rate'])
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(extra_update_ops):
-        train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
+    with tf.name_scope('train'):
+        optimizer = tf.train.AdamOptimizer(learning_rate=params['learning_rate'])
+        with tf.control_dependencies(extra_update_ops):
+            train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
 
-    return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
+    train_spec = tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
+
+    # Use a custom checkpoint saver hook to avoid saving the graph definition 
+    # every single checkpoint
+    save_hook = CustomCheckpointSaverHook(
+        params['model_dir'], save_secs=config.save_checkpoints_secs,
+        save_steps=config.save_checkpoints_steps, scaffold=train_spec.scaffold)
+    train_spec = train_spec._replace(training_chief_hooks=[save_hook])
+
+    return train_spec
 
 
 class ResNet(tf.keras.Model):
