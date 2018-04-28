@@ -29,8 +29,10 @@ def model_fn(features, labels, mode, params, config):
     -------
     EstimatorSpec
     """
-    model = ResNet(params['data_format'], 
-                   regularizer=tf.keras.regularizers.l2(l=params['reg_scale']))
+    data_format = params.get('data_format', 'channels_first')
+    reg_scale = params.get('reg_scale', 0.0005)
+    regularizer = tf.keras.regularizers.l2(l=reg_scale)
+    model = ResNet(data_format, regularizer=regularizer)
     image = features
     if isinstance(image, dict):
         image = features['image']
@@ -57,9 +59,19 @@ def model_fn(features, labels, mode, params, config):
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, 
                                           eval_metric_ops={'accuracy': accuracy})
 
+    optim_type = params.get('optim_type', 'Adam')
+    learning_rate = params.get('learning_rate', 0.01)
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.name_scope('train'):
-        optimizer = tf.train.AdamOptimizer(learning_rate=params['learning_rate'])
+        if optim_type is 'Adam':
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        elif optim_type is 'Momentum':
+            momentum = params.get('momentum', 0.9)
+            optimizer = tf.train.MomentumOptimizer(
+                learning_rate=learning_rate, momentum=momentum, use_nesterov=True)
+        else:
+            raise ValueError('Unrecognized optimizer type:', optim_type)
+
         with tf.control_dependencies(extra_update_ops):
             train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
 
@@ -68,7 +80,7 @@ def model_fn(features, labels, mode, params, config):
     # Use a custom checkpoint saver hook to avoid saving the graph definition 
     # every single checkpoint
     save_hook = CustomCheckpointSaverHook(
-        params['model_dir'], save_secs=config.save_checkpoints_secs,
+        config.model_dir, save_secs=config.save_checkpoints_secs,
         save_steps=config.save_checkpoints_steps, scaffold=train_spec.scaffold)
     train_spec = train_spec._replace(training_chief_hooks=[save_hook])
 
@@ -127,7 +139,6 @@ class ResNet(tf.keras.Model):
         reduction_indices = tf.constant(reduction_indices)
         self.global_pool = functools.partial(tf.reduce_mean,
             reduction_indices=reduction_indices, keepdims=False)
-        self.flatten = tf.keras.layers.Flatten()
         self.fc = tf.keras.layers.Dense(classes, name='fc', 
                                         kernel_regularizer=regularizer)
 
@@ -138,7 +149,7 @@ class ResNet(tf.keras.Model):
             x = layer(x, training=training)
 
         x = self.global_pool(x)
-        return self.fc(self.flatten(x))
+        return self.fc(tf.layers.flatten(x))
 
 class ResBlock(tf.keras.Model):
     """Implement a residual block.
@@ -179,25 +190,25 @@ class ResBlock(tf.keras.Model):
         self.first_block = block is 'a'
         strides = (2, 2) if self.first_block else (1, 1)
 
-        self.bn1 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'1')
-        self.conv1 = tf.keras.layers.Conv2D(mid_channels, (1, 1), strides=strides, 
-                                   name=conv_name+'1', data_format=data_format,
-                                   kernel_regularizer=regularizer)
+        self.bn1 = tf.layers.BatchNormalization(axis=bn_axis, name=bn_name+'1')
+        self.conv1 = tf.keras.layers.Conv2D(
+            mid_channels, (1, 1), strides=strides, name=conv_name+'1', 
+            data_format=data_format, kernel_regularizer=regularizer)
 
-        self.bn2 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'2')
-        self.conv2 = tf.keras.layers.Conv2D(mid_channels, (3, 3), name=conv_name+'2', 
-                                   padding='same', data_format=data_format,
-                                   kernel_regularizer=regularizer)
+        self.bn2 = tf.layers.BatchNormalization(axis=bn_axis, name=bn_name+'2')
+        self.conv2 = tf.keras.layers.Conv2D(
+            mid_channels, (3, 3), name=conv_name+'2', padding='same', 
+            data_format=data_format, kernel_regularizer=regularizer)
 
-        self.bn3 = tf.keras.layers.BatchNormalization(axis=bn_axis, name=bn_name+'3')
-        self.conv3 = tf.keras.layers.Conv2D(output_channels, (1, 1), name=conv_name+'3', 
-                                   data_format=data_format,
-                                   kernel_regularizer=regularizer)
+        self.bn3 = tf.layers.BatchNormalization(axis=bn_axis, name=bn_name+'3')
+        self.conv3 = tf.keras.layers.Conv2D(
+            output_channels, (1, 1), name=conv_name+'3', data_format=data_format,
+            kernel_regularizer=regularizer)
 
         if self.first_block:
-            self.conv0 = tf.keras.layers.Conv2D(output_channels, (1, 1),
-                strides=strides, name=conv_name+'0', data_format=data_format,
-                kernel_regularizer=regularizer)
+            self.conv0 = tf.keras.layers.Conv2D(
+                output_channels, (1, 1), strides=strides, name=conv_name+'0', 
+                data_format=data_format, kernel_regularizer=regularizer)
 
     def call(self, input_data, training=False):
         x = self.bn1(input_data, training=training)
