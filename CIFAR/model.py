@@ -31,8 +31,9 @@ def model_fn(features, labels, mode, params, config):
     """
     data_format = params.get('data_format', 'channels_first')
     reg_scale = params.get('reg_scale', 0.0005)
+    init_channels = params.get('init_channels', 16)
     regularizer = tf.keras.regularizers.l2(l=reg_scale)
-    model = ResNet(data_format, regularizer=regularizer)
+    model = ResNet(data_format, init_channels=init_channels, regularizer=regularizer)
     image = features
     if isinstance(image, dict):
         image = features['image']
@@ -62,18 +63,26 @@ def model_fn(features, labels, mode, params, config):
     optim_type = params.get('optim_type', 'Adam')
     learning_rate = params.get('learning_rate', 0.01)
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    global_step = tf.train.get_or_create_global_step()
     with tf.name_scope('train'):
         if optim_type is 'Adam':
             optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
         elif optim_type is 'Momentum':
             momentum = params.get('momentum', 0.9)
+            if isinstance(learning_rate, list):
+                boundaries = learning_rate[0]
+                values = learning_rate[1]
+                mom_learn_rate = tf.train.piecewise_constant(
+                    global_step, boundaries, values)
+            else:
+                mom_learn_rate = learning_rate
             optimizer = tf.train.MomentumOptimizer(
-                learning_rate=learning_rate, momentum=momentum, use_nesterov=True)
+                learning_rate=mom_learn_rate, momentum=momentum, use_nesterov=True)
         else:
             raise ValueError('Unrecognized optimizer type:', optim_type)
 
         with tf.control_dependencies(extra_update_ops):
-            train_op = optimizer.minimize(loss, tf.train.get_or_create_global_step())
+            train_op = optimizer.minimize(loss, global_step)
 
     train_spec = tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
