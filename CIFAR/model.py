@@ -1,5 +1,6 @@
 from custom_session_run_hooks import CustomCheckpointSaverHook
 import functools
+from itertools import product
 import tensorflow as tf
 
 def compute_accuracy(labels, logits):
@@ -31,7 +32,7 @@ def model_fn(features, labels, mode, params, config):
     """
     data_format = params.get('data_format', 'channels_first')
     reg_scale = params.get('reg_scale', 0.0005)
-    init_channels = params.get('init_channels', 16)
+    init_channels = params.get('init_channels', 64)
     regularizer = tf.keras.regularizers.l2(l=reg_scale)
     model = ResNet(data_format, init_channels=init_channels, regularizer=regularizer)
     image = features
@@ -97,15 +98,14 @@ def model_fn(features, labels, mode, params, config):
 
 
 class ResNet(tf.keras.Model):
-    """Implement a wide ResNet-style architecture.
+    """Implement a  ResNet-style architecture.
 
-    Stacks multiple stages of residual blocks, with a fixed number of residual
-    blocks (3) per stage. At each stage, we downsample by a factor of two, using
-    strided convolution, and increase the number of channels by two.
-
-    To start we will perform a 3x3 convolution on the input and increase the 
-    number of channels to some amount. At the end we'll perform a global average
-    pool and a single fully-connected layer.
+    Stacks multiple stages of residual blocks, with a variable number of residual
+    blocks per stage. We always start with a 3x3 convolution expanding to 16 
+    channels. Following this, we pass through a series of residual blocks. The 
+    number of output channels is specified for the first stage, and no downsampling
+    is performed. Following this, the output channels are doubled each stage and 
+    the feature maps are downsampled by a factor of two.
 
     Parameters
     ----------
@@ -113,37 +113,40 @@ class ResNet(tf.keras.Model):
         'channels_first' or 'channels_last', indicating the ordering of feature
         maps and channels.
     init_channels : int
-        Number of channels used in the first convolution. Defaults to 16.
+        Number of channels used in the first residual stage. Defaults to 64.
     num_stages : int
         Number of residual stages. Note that we downsample by two after each 
-        stage, so this should not be more than log2(M), where M is image dimension.
-        Defaults to 3.
+        stage past the first, so this should not be more than 1+log2(M), where M 
+        is image dimension. Defaults to 3.
+    num_blocks : int
+        Number of residual blocks per stage. Defaults to 3.
     classes : int
         Number of classes. Defaults to 10.
     regularizer : function
         Regularizer function applied to all weights in the network. Defaults to
         None.
     """
-    def __init__(self, data_format, init_channels=16, num_stages=3, classes=10,
-                 regularizer=None):
+    def __init__(self, data_format, init_channels=64, num_stages=3, num_blocks=3,
+                 classes=10, regularizer=None):
         super().__init__()
         self.conv_init = tf.keras.layers.Conv2D(
-            init_channels, (3, 3), data_format=data_format, padding='same', 
+            16, (3, 3), data_format=data_format, padding='same', 
             name='conv_init', kernel_regularizer=regularizer)
 
         self.num_stages = num_stages
-        output_channels = 2*init_channels
-        for idx in range(self.num_stages):
-            stage = str(idx)
-            self.layers.append(ResBlock(output_channels, data_format, 
-                                        stage, 'a', regularizer=regularizer))
-            self.layers.append(ResBlock(output_channels, data_format, 
-                                        stage, 'b', regularizer=regularizer))
-            self.layers.append(ResBlock(output_channels, data_format, 
-                                        stage, 'c', regularizer=regularizer))
+        self.num_blocks = num_blocks
+        for stage, block in product(range(num_stages), range(num_blocks)):
+            name = str(stage)+'_'+str(block)
+            stride = 2 if (stage>0 and block==0) else 1
+            shortcut_activate = True if block==0 else False
+            output_channels = init_channels*(2**stage)
+            self.layers.append(ResBlock(output_channels, data_format, name,
+                                        shortcut_activate=shortcut_activate,
+                                        stride=stride, regularizer=regularizer))
 
-            output_channels *= 2
 
+        bn_axis = 1 if data_format is 'channels_first' else 3
+        self.bn = tf.layers.BatchNormalization(axis=bn_axis, name='bn_final')
         reduction_indices = [2, 3] if data_format is 'channels_first' else [1, 2]
         reduction_indices = tf.constant(reduction_indices)
         self.global_pool = functools.partial(tf.reduce_mean,
@@ -154,54 +157,62 @@ class ResNet(tf.keras.Model):
     def call(self, input_data, training=False):
         x = self.conv_init(input_data)
 
-        for layer in self.layers[1:3*self.num_stages+1]:
+        num_res = self.num_blocks*self.num_stages
+        for layer in self.layers[1:num_res+1]:
             x = layer(x, training=training)
 
+        x = self.bn(x, training=training)
+        x = tf.nn.relu(x)
         x = self.global_pool(x)
         return self.fc(tf.layers.flatten(x))
 
 class ResBlock(tf.keras.Model):
     """Implement a residual block.
 
-    Each block has the following form
-        input [NxNxC0] -> (1x1, C1)->(3x3, C1)->(1x1, C2) -> conv+input [NxNxC2]
+    Each block has the following form:
+        input [NxNxC0] -> (1x1, C1)->(3x3, C1)->(1x1, C2) -> conv+input [MxMxC2]
     with batch-norm and ReLU nonlinearity inserted before each conv operation.
 
-    Note that on the first block of each stage, we downsample by two and increase
-    output chans. This means that the shortcut path for the first block contains
-    a strided convolution and increase in channel number, but there is no batch-norm
-    or nonlinearity on this path. The first convolution in the block will also be
-    strided in this case.
+    Note that M != N. If we specify a non-unity stride, M = N/stride, where 
+    downsampling via strided convolution occurs on the first 1x1 convolution and
+    the shortcut path. Also note that for now we have a fixed relation C1 = C2/4.
+    
+    For the 
 
     Parameters
     ----------
     output_channels : int
-        Number of channels in the output.
+        Number of channels in the output (e.g., C2)
     data_format : string
         'channels_first' or 'channels_last', indicating the ordering of feature
         maps and channels.
-    stage : string
-        Name of the residual stage to which this block belongs.
-    block : string
-        Name of the block within the stage. The first block is expected to be
-        named 'a', which will cause us to downsample the input by 2.
+    name : string
+        Name of the residual block.
+    stride : int
+        Stride used to downsample the input on the first convolution and shortcut
+        path. Defaults to 1 (no downsampling).
+    shortcut_activate : bool
+        Whether or not to make the first activation (batch-norm+ReLU) common to
+        the residual and shortcut paths and place a 1x1 (possibly strided) 
+        convolution on the shortcut path. Defaults to False (only on residual path).
     regularizer : function
         Regularizer function applied to all weights in the network. Defaults to
         None.
     """
-    def __init__(self, output_channels, data_format, stage, block, regularizer=None):
+    def __init__(self, output_channels, data_format, name, stride=1, 
+                 shortcut_activate=False, regularizer=None):
         super().__init__()
-        mid_channels = output_channels//2
+        mid_channels = output_channels//4
         bn_axis = 1 if data_format is 'channels_first' else 3
-        bn_name = 'bn'+stage+block+'_'
-        conv_name = 'conv'+stage+block+'_'
-        # downsample on first block in each layer
-        self.first_block = block is 'a'
-        strides = (2, 2) if self.first_block else (1, 1)
+        bn_name = 'bn'+name+'_'
+        conv_name = 'conv'+name+'_'
+        self.shortcut_activate = shortcut_activate
+        self.stride = stride
+        conv_stride = (stride, stride)
 
         self.bn1 = tf.layers.BatchNormalization(axis=bn_axis, name=bn_name+'1')
         self.conv1 = tf.keras.layers.Conv2D(
-            mid_channels, (1, 1), strides=strides, name=conv_name+'1', 
+            mid_channels, (1, 1), strides=conv_stride, name=conv_name+'1', 
             data_format=data_format, kernel_regularizer=regularizer)
 
         self.bn2 = tf.layers.BatchNormalization(axis=bn_axis, name=bn_name+'2')
@@ -214,15 +225,15 @@ class ResBlock(tf.keras.Model):
             output_channels, (1, 1), name=conv_name+'3', data_format=data_format,
             kernel_regularizer=regularizer)
 
-        if self.first_block:
+        if self.shortcut_activate:
             self.conv0 = tf.keras.layers.Conv2D(
-                output_channels, (1, 1), strides=strides, name=conv_name+'0', 
+                output_channels, (1, 1), strides=conv_stride, name=conv_name+'0', 
                 data_format=data_format, kernel_regularizer=regularizer)
 
     def call(self, input_data, training=False):
-        x = self.bn1(input_data, training=training)
-        x = tf.nn.relu(x)
-        x = self.conv1(x)
+        x_in = self.bn1(input_data, training=training)
+        x_in = tf.nn.relu(x_in)
+        x = self.conv1(x_in)
 
         x = self.bn2(x, training=training)
         x = tf.nn.relu(x)
@@ -232,8 +243,8 @@ class ResBlock(tf.keras.Model):
         x = tf.nn.relu(x)
         x = self.conv3(x)
 
-        if self.first_block:
-            shortcut = self.conv0(input_data)
+        if self.shortcut_activate:
+            shortcut = self.conv0(x_in)
         else:
             shortcut = input_data
         return x+shortcut
