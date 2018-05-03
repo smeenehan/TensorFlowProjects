@@ -31,10 +31,12 @@ def model_fn(features, labels, mode, params, config):
     EstimatorSpec
     """
     data_format = params.get('data_format', 'channels_first')
-    reg_scale = params.get('reg_scale', 0.0005)
+    reg_scale = params.get('reg_scale', 0.0001)
+    init_channels = params.get('num_blocks', 3)
     init_channels = params.get('init_channels', 64)
     regularizer = tf.keras.regularizers.l2(l=reg_scale)
-    model = ResNet(data_format, init_channels=init_channels, regularizer=regularizer)
+    model = ResNet(data_format, init_channels=init_channels, 
+                   num_blocks=num_blocks, regularizer=regularizer)
     image = features
     if isinstance(image, dict):
         image = features['image']
@@ -101,7 +103,7 @@ class ResNet(tf.keras.Model):
     """Implement a  ResNet-style architecture.
 
     Stacks multiple stages of residual blocks, with a variable number of residual
-    blocks per stage. We always start with a 3x3 convolution expanding to 16 
+    blocks per stage. We always start with a 3x3 convolution expanding to init_channels/4
     channels. Following this, we pass through a series of residual blocks. The 
     number of output channels is specified for the first stage, and no downsampling
     is performed. Following this, the output channels are doubled each stage and 
@@ -130,7 +132,7 @@ class ResNet(tf.keras.Model):
                  classes=10, regularizer=None):
         super().__init__()
         self.conv_init = tf.keras.layers.Conv2D(
-            16, (3, 3), data_format=data_format, padding='same', 
+            init_channels//4, (3, 3), data_format=data_format, padding='same', 
             name='conv_init', kernel_regularizer=regularizer)
 
         self.num_stages = num_stages
