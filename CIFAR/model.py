@@ -32,6 +32,7 @@ def model_fn(features, labels, mode, params, config):
     """
     data_format = params.get('data_format', 'channels_first')
     reg_scale = params.get('reg_scale', 0.0001)
+    num_blocks = params.get('num_stages', 3)
     num_blocks = params.get('num_blocks', 3)
     init_channels = params.get('init_channels', 64)
     regularizer = tf.keras.regularizers.l2(l=reg_scale)
