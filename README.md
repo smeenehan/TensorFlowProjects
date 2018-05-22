@@ -2,4 +2,4 @@
 
 Loose agglomeration of projects to help learn and play around with TensorFlow.
 
-* **CIFAR** Trying different CNN models for classifying the CIFAR-10 and CIFAR-100 datasets.
+* **CIFAR** Messing around with simple classification using ResNets on the CIFAR10 dataset.
