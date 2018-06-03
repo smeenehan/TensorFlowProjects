@@ -1,5 +1,6 @@
 from backbone import ResNet
 from region_proposal import RPN, ProposalLayer
+from roi_classifier import ROIAlign, ROIHead
 import tensorflow as tf
 from utils import generate_anchors
 
@@ -32,6 +33,8 @@ def model_fn(features, labels, mode, params, config):
     rpn_graph = RPN(data_format, anchors_per_loc=num_anchors, 
                     anchor_stride=anchor_stride)
     proposer = ProposalLayer()
+    roi_align = ROIAlign()
+    roi_head = ROIHead(data_format)
 
     image = features
     if isinstance(image, dict):
@@ -45,7 +48,9 @@ def model_fn(features, labels, mode, params, config):
             anchor_scales, anchor_ratios, tf.shape(image)[1:3], 
             tf.shape(feature_maps)[1:3], anchor_stride)
         anchors = tf.tile(tf.expand_dims(anchors, 0), [tf.shape(images)[0], 1, 1])
-    roi_proposals = proposer([rpn_probs, rpn_boxes, anchors])
+    roi = proposer([rpn_probs, rpn_boxes, anchors])
+    roi_features = roi_align([feature_maps, roi])
+    roi_logits, roi_bboxes = roi_head(roi_features)
     
     classes = tf.argmax(logits, axis=1, output_type=tf.int32, name='predictions')
 

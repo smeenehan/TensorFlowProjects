@@ -77,7 +77,7 @@ class ProposalLayer(tf.keras.Model):
     """Select a subset of region proposals from the RPN to pass as proposals to
     the second classifier stage.
 
-    Filtering is base on anchor foreground score relative to a threshold, and 
+    Filtering is based on anchor foreground score relative to a threshold, and 
     non-max suppression is used to reduce bounding box overlaps. Bounding box
     refinement is also applied at this stage.
 
@@ -108,7 +108,7 @@ class ProposalLayer(tf.keras.Model):
         Returns
         -------
         tensor
-            ROI proposals in normalized coordinates [N, rois, (y1, x1, y2, x2)]
+            ROI proposals in normalized coordinates [N, roi, (y1, x1, y2, x2)]
         """
         fg_scores = input_data[0][:, :, 1]
         bbox_deltas = input_data[1]
