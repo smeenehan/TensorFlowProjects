@@ -1,5 +1,5 @@
 import tensorflow as tf
-from utils import map_over_batch
+from utils import update_bboxes
 
 class RPN(tf.keras.Model):
     """Implement a Region Proposal Network.
@@ -84,12 +84,12 @@ class ProposalLayer(tf.keras.Model):
     Parameters
     ----------
     num_proposals : int
-        Maximum number of proposals output by the layer. Defaults to 2000.
+        Maximum number of proposals output by the layer. Defaults to 500.
     overlap_thresh : float
         Threshold for deciding if proposals overlap (with respect to the IoU
         metric), during the non-max suppression stage. Defaults to 0.7.
     """
-    def __init__(self, num_proposals=2000, overlap_thresh=0.7):
+    def __init__(self, num_proposals=500, overlap_thresh=0.7):
         super().__init__()
         self.num_proposals = num_proposals
         self.overlap_thresh = overlap_thresh
@@ -115,7 +115,8 @@ class ProposalLayer(tf.keras.Model):
         anchors = input_data[2]
         num_batch = tf.shape(fg_scores)[0]
 
-        updated_boxes = update_bboxes(anchors, bbox_deltas)
+        updated_boxes = tf.map_fn(lambda x: update_bboxes(x[0], x[1]),
+                                  [anchors, bbox_deltas], dtype=tf.float32)
         updated_boxes = tf.clip_by_value(
             updated_boxes, 0, 1, name='updated_bboxes_clipped')
 
@@ -131,35 +132,4 @@ class ProposalLayer(tf.keras.Model):
 
         final_proposals = tf.map_fn(nms, [updated_boxes, fg_scores], dtype=tf.float32)
         return final_proposals
-
-def update_bboxes(boxes, deltas):
-    """
-    Parameters
-    ----------
-    boxes : tensor
-        Bounding boxes to update, in normalized coordinates, 
-        [N, anchors, (y1, x1, y2, x2)]
-    deltas: tensor
-        Refinements to apply, [N, anchors, (dy, dx, log(dh), log(dw))]
-    Returns
-    -------
-    tensor
-        Updated bounding boxes, in normalized coordinates, 
-        [N, anchors, (y1, x1, y2, x2)]
-    """
-    height = boxes[:, :, 2]-boxes[:, :, 0]
-    center_y = boxes[:, :, 0]+0.5*height
-    width = boxes[:, :, 3]-boxes[:, :, 1]
-    center_x = boxes[:, :, 1]+0.5*width
-
-    center_y += deltas[:, :, 0]*height
-    center_x += deltas[:, :, 1]*width
-    height *= tf.exp(deltas[:, :, 2])
-    width *= tf.exp(deltas[:, :, 3])
-
-    y1 = center_y-0.5*height
-    x1 = center_x-0.5*width
-    y2 = y1+height
-    x2 = x1+width
-    return tf.stack([y1, x1, y2, x2], axis=2, name='updated_bboxes')
 

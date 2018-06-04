@@ -1,4 +1,5 @@
 import tensorflow as tf
+from utils import update_bboxes
 
 class ROIAlign(tf.keras.Model):
     """Generate ROI features by pooling a feature map to a specified size.
@@ -80,13 +81,13 @@ class ROIHead(tf.keras.Model):
         self.bn = tf.keras.layers.TimeDistributed(tf.layers.BatchNormalization(
             axis=bn_axis, name='bn'))
         self.fc1 = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(
-            hidden_dim, name='fc1'kernel_regularizer=regularizer))
+            hidden_dim, name='fc1', kernel_regularizer=regularizer))
         self.fc2 = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(
-            hidden_dim, name='fc2'kernel_regularizer=regularizer))
+            hidden_dim, name='fc2', kernel_regularizer=regularizer))
         self.fc_class = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(
-            num_classes, name='fc_class',kernel_regularizer=regularizer))
+            num_classes, name='fc_class', kernel_regularizer=regularizer))
         self.fc_bbox = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(
-            4*num_classes, name='fc_bbox',kernel_regularizer=regularizer))
+            4*num_classes, name='fc_bbox', kernel_regularizer=regularizer))
 
     def call(self, input_data, training=False):
         """
@@ -98,8 +99,9 @@ class ROIHead(tf.keras.Model):
         Returns
         -------
         list of tensors
-            logits and bounding box refinements for each ROI, dimensions
-            [N, num_roi, num_classes], [N, num_roi, 4*num_classes], respectively.
+            logits, probabilities, and bounding box refinements for each ROI, 
+            dimensions [N, num_roi, num_classes], [N, num_roi, num_classes], 
+            [N, num_roi, 4*num_classes], respectively.
         """
         x = self.conv(input_data)
         x = self.bn(x, training=training)
@@ -109,7 +111,128 @@ class ROIHead(tf.keras.Model):
         x = tf.nn.relu(x)
         x = self.fc2(x)
         x = tf.nn.relu(x)
-        class_logits = self.fc_class(x)
+        logits = self.fc_class(x)
+        probs =  tf.nn.softmax(logits)
         bbox = self.fc_bbox(x)
-        return [class_logits, bbox]
+        return [logits, probs, bbox]
+
+class DetectionLayer(tf.keras.Model):
+    """Generate detection events from classified ROI. Updates bounding boxes and
+    filters out background boxes and low-confidence boxes.
+
+    Parameters
+    ----------
+    prob_thresh : float
+        Threshold probability (confidence) to consider a non-background ROI a 
+        true object. Should be between 0 and 1. Defaults to 0.7
+    num_detect : int
+        Maximum number of objects to detect per image. Default to 25.
+    overlap_thresh : float
+        Threshold for deciding if proposals overlap (with respect to the IoU
+        metric), during the non-max suppression stage. Defaults to 0.3.
+    """
+    def __init__(self, prob_thresh=0.7, num_detect=25, overlap_thresh=0.3):
+        self.prob_thresh = prob_thresh
+        self.num_detect = num_detect
+        self.overlap_thresh = overlap_thresh
+
+    def call(self, input_data):
+        """
+        Parameters
+        ----------
+        input_data : list of tensors
+            - ROI proposals in normalized coordinates, [N, num_rois, (y1, x1, y2, x2)]
+            - Class scores of each ROI, [N, num_rois, num_classes]
+            - Bounding box refinements, 
+              [N, num_rois, num_classes, (dy, dx, log(dh), log(dw))]
+        Returns
+        -------
+        tensor
+            Detection boxes, in normalized coordinates, 
+            [N, num_detect, (y1, x1, y2, x2, class_id, class_score)]
+        """
+        roi, probs, deltas = input_data
+        detections = tf.map_fn(self.filter_detections, 
+                               [roi, probs, deltas], dtype=tf.float32)
+        return detections
+
+    def filter_detections(input_data):
+        """Apply bounding box deltas, filter bad boxes, and apply class-specific
+        non-max suppression. This is mapped separately over each element of the 
+        batch since filtering+NMS may result in different numbers of detections 
+        for each batch element.
+
+        Parameters
+        ----------
+        input_data : list of tensors
+            - ROI proposals in normalized coordinates, [num_rois, (y1, x1, y2, x2)]
+            - Class scores of each ROI, [num_rois, num_classes]
+            - Bounding box refinements, 
+              [num_rois, num_classes, (dy, dx, log(dh), log(dw))]
+        Returns
+        -------
+        tensor
+            Detection boxes, in normalized coordinates, 
+            [num_detect, (y1, x1, y2, x2, class_id, class_score)]
+        """
+        roi, probs, deltas = input_data
+        class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
+        class_inds = tf.stack([tf.range(tf.shape(probs[0])), class_ids], axis=1)
+
+        class_probs = tf.gather_nd(probs, class_inds)
+        class_deltas = tf.gather_nd(deltas, class_inds)
+        class_roi = update_bboxes(roi, class_deltas)
+        class_roi = tf.clip_by_value(class_roi, 0, 1)
+
+        # Discard all background and low-confidence boxes
+        keep = tf.where((class_ids>0) & (class_probs>=self.prob_thresh))
+        keep = tf.squeeze(keep)
+        class_ids = tf.gather(class_ids, keep)
+        class_probs = tf.gather(class_probs, keep)
+        class_roi = tf.gather(class_roi, keep)
+        unique_class_ids = tf.unique(class_ids)[0]
+
+        def nms(curr_id):
+            indices = tf.squeeze(tf.where(tf.equal(class_ids, curr_id)))
+            curr_roi = tf.gather(class_roi, indices)
+            curr_probs = tf.gather(class_probs, indices)
+            class_keep = tf.image.non_max_suppression(
+                curr_roi, curr_probs, self.num_detect, 
+                iou_threshold=self.overlap_thresh)
+            class_keep = tf.gather(keep, tf.gather(indices, class_keep))
+
+            # Pad with -1 so all classes return same size for stacking
+            padding = tf.maximum(self.num_detect-tf.shape(class_keep)[0], 0)
+            class_keep = tf.pad(class_keep, [(0, padding)], 'CONSTANT',
+                               constant_values=-1)
+            class_keep.set_shape([self.num_detect])
+            return class_keep
+
+        # Filter ROI for each class with NMS, up to num_detect per class, and put
+        # in a single list, filtering out -1 padding we inserted in the mapping
+        nms_keep = tf.map_fn(nms, unique_class_ids, dtype=tf.int32)
+        nms_keep = tf.reshape(nms_keep, [-1])
+        nms_keep = tf.gather(nms_keep, tf.squeeze(tf.where(nms_keep>-1)))
+
+        # Keep only top detections, up to num_detect total
+        nms_class_probs = tf.gather(class_probs, nms_keep)
+        num_keep = tf.minimum(tf.shape(nms_class_probs)[0], self.num_detect)
+        top_probs = tf.nn.top_k(nms_class_probs, k=num_keep, sorted=True)[1]
+        final_keep = tf.gather(nms_keep, top_probs)
+
+        final_roi = tf.gather(class_roi, final_keep)
+        final_ids = tf.cast(tf.gather(class_ids, final_keep), tf.float32)
+        final_probs = tf.gather(class_probs, final_keep)
+
+        detections = tf.concat([final_roi, final_ids[:, None], final_probs[:, None]],
+                               axis=1)
+        padding = tf.maximum(self.num_detect-tf.shape(detections)[0], 0)
+        detections = tf.pad(detections, [(0, padding), (0, 0)])
+        return detections
+
+
+
+
+
+
 

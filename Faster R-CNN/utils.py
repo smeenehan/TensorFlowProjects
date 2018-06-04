@@ -48,3 +48,35 @@ def generate_anchors(scales, ratios, image_shape, feature_shape, anchor_stride):
     scale = tf.cast(tf.concat([image_shape, image_shape], axis=0), tf.float32)
     boxes = tf.divide(boxes, scale)
     return boxes
+
+def update_bboxes(boxes, deltas):
+    """Apply bounding box refinements.
+
+    Parameters
+    ----------
+    boxes : tensor
+        Bounding boxes to update, in normalized coordinates, 
+        [num_boxes, (y1, x1, y2, x2)]
+    deltas: tensor
+        Refinements to apply, [num_boxes, (dy, dx, log(dh), log(dw))]
+    Returns
+    -------
+    tensor
+        Updated bounding boxes, in normalized coordinates, 
+        [num_boxes, (y1, x1, y2, x2)]
+    """
+    height = boxes[:, 2]-boxes[:, 0]
+    center_y = boxes[:, 0]+0.5*height
+    width = boxes[:, 3]-boxes[:, 1]
+    center_x = boxes[:, 1]+0.5*width
+
+    center_y += deltas[:, 0]*height
+    center_x += deltas[:, 1]*width
+    height *= tf.exp(deltas[:, 2])
+    width *= tf.exp(deltas[:, 3])
+
+    y1 = center_y-0.5*height
+    x1 = center_x-0.5*width
+    y2 = y1+height
+    x2 = x1+width
+    return tf.stack([y1, x1, y2, x2], axis=1, name='updated_bboxes')
