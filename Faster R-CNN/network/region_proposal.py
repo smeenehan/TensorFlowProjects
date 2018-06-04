@@ -1,5 +1,5 @@
+from network.utils import update_bboxes
 import tensorflow as tf
-from utils import update_bboxes
 
 class RPN(tf.keras.Model):
     """Implement a Region Proposal Network.
@@ -46,7 +46,7 @@ class RPN(tf.keras.Model):
         ----------
         input_data : tensor
             Feature map batch, either in NHWC or NCHW format, depending on how the 
-            network was initialized. Should be the ouput of thepenultimate layer 
+            network was initialized. Should be the ouput of the penultimate layer 
             in a classifier backbone network. 
         training : bool
             Indicates whether we are in training mode, which affects whether we

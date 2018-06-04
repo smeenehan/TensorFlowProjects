@@ -1,5 +1,5 @@
+from network.utils import update_bboxes
 import tensorflow as tf
-from utils import update_bboxes
 
 class ROIAlign(tf.keras.Model):
     """Generate ROI features by pooling a feature map to a specified size.
