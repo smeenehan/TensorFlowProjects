@@ -49,3 +49,37 @@ class TestUtils(tf.test.TestCase):
             sess.run(tf.global_variables_initializer())
             bboxes_result = sess.run(bboxes)
             self.assertAllClose(bboxes_result, expected_bboxes)
+
+    def test_bbox_overlap(self):
+        boxes_1 = tf.convert_to_tensor(
+            np.array([[0, 0, 0.25, 0.25], 
+                      [0.5, 0, 1, 0.4],
+                      [0.4, 0.4, 0.6, 0.6],
+                      [0.75, 0.75, 1, 1]]).astype('float32'))
+        boxes_2 = tf.convert_to_tensor(
+            np.array([[0.25, 0.25, 0.75, 0.75], 
+                      [0.5, 0.5, 0.8, 0.8]]).astype('float32'))
+        expected_iou = np.array([[0.0, 0.0], [0.090909, 0.0], 
+                                 [0.16, 0.083333], [0.0, 0.016666]])
+
+        iou = utils.bbox_overlap(boxes_1, boxes_2)
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            iou_result = sess.run(iou)
+            self.assertAllClose(iou_result, expected_iou)
+
+    def test_compute_bbox_deltas(self):
+        init = tf.convert_to_tensor(
+            np.array([[0, 0.12, 0.25, 0.22], 
+                      [0.5, 0, 1, 0.4]]).astype('float32'))
+        target = tf.convert_to_tensor(
+            np.array([[0.25, 0.25, 0.75, 0.75], 
+                      [0.5, 0.5, 0.8, 0.8]]).astype('float32'))
+        expected_deltas = np.array([[1.5, 3.3, 0.693147, 1.609438], 
+                                    [-0.2, 1.125, -0.510826, -0.287683]])
+
+        deltas = utils.compute_bbox_deltas(init, target)
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            deltas_result = sess.run(deltas)
+            self.assertAllClose(deltas_result, expected_deltas)
