@@ -53,8 +53,6 @@ class ROIHead(tf.keras.Model):
 
     Parameters
     ----------
-    Parameters
-    ----------
     data_format : string
         'channels_first' or 'channels_last', indicating the ordering of feature
         maps and channels.
@@ -76,7 +74,7 @@ class ROIHead(tf.keras.Model):
         super().__init__()
         self.conv = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
             num_channels, pool_shape, data_format=data_format, use_bias=False, 
-            padding='same', kernel_regularizer=regularizer))
+            padding='valid', kernel_regularizer=regularizer))
         bn_axis = 1 if data_format is 'channels_first' else 3
         self.bn = tf.keras.layers.TimeDistributed(tf.layers.BatchNormalization(
             axis=bn_axis, name='bn'))
@@ -101,7 +99,7 @@ class ROIHead(tf.keras.Model):
         list of tensors
             logits, probabilities, and bounding box refinements for each ROI, 
             dimensions [N, num_roi, num_classes], [N, num_roi, num_classes], 
-            [N, num_roi, 4*num_classes], respectively.
+            [N, num_roi, num_classes, (dy, dx, log(dh), log(dw))], respectively.
         """
         x = self.conv(input_data)
         x = self.bn(x, training=training)
@@ -114,6 +112,7 @@ class ROIHead(tf.keras.Model):
         logits = self.fc_class(x)
         probs =  tf.nn.softmax(logits)
         bbox = self.fc_bbox(x)
+        bbox = tf.reshape(bbox, [tf.shape(bbox)[0], tf.shape(bbox)[1], -1, 4])
         return [logits, probs, bbox]
 
 class DetectionLayer(tf.keras.Model):
@@ -122,18 +121,19 @@ class DetectionLayer(tf.keras.Model):
 
     Parameters
     ----------
+    num_detect : int
+        Maximum number of objects to detect per image. Default to 25.
     prob_thresh : float
         Threshold probability (confidence) to consider a non-background ROI a 
         true object. Should be between 0 and 1. Defaults to 0.7
-    num_detect : int
-        Maximum number of objects to detect per image. Default to 25.
     overlap_thresh : float
         Threshold for deciding if proposals overlap (with respect to the IoU
         metric), during the non-max suppression stage. Defaults to 0.3.
     """
-    def __init__(self, prob_thresh=0.7, num_detect=25, overlap_thresh=0.3):
+    def __init__(self, num_detect=25, prob_thresh=0.7, overlap_thresh=0.3):
+        super().__init__()
+        self.num_detect = num_detect        
         self.prob_thresh = prob_thresh
-        self.num_detect = num_detect
         self.overlap_thresh = overlap_thresh
 
     def call(self, input_data):
@@ -156,7 +156,7 @@ class DetectionLayer(tf.keras.Model):
                                [roi, probs, deltas], dtype=tf.float32)
         return detections
 
-    def filter_detections(input_data):
+    def filter_detections(self, input_data):
         """Apply bounding box deltas, filter bad boxes, and apply class-specific
         non-max suppression. This is mapped separately over each element of the 
         batch since filtering+NMS may result in different numbers of detections 
@@ -177,7 +177,7 @@ class DetectionLayer(tf.keras.Model):
         """
         roi, probs, deltas = input_data
         class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
-        class_inds = tf.stack([tf.range(tf.shape(probs[0])), class_ids], axis=1)
+        class_inds = tf.stack([tf.range(tf.shape(probs)[0]), class_ids], axis=1)
 
         class_probs = tf.gather_nd(probs, class_inds)
         class_deltas = tf.gather_nd(deltas, class_inds)
@@ -185,22 +185,23 @@ class DetectionLayer(tf.keras.Model):
         class_roi = tf.clip_by_value(class_roi, 0, 1)
 
         # Discard all background and low-confidence boxes
-        keep = tf.where((class_ids>0) & (class_probs>=self.prob_thresh))
-        keep = tf.squeeze(keep)
+        keep = tf.where((class_ids>0) & (class_probs>=self.prob_thresh))[:, 0]
+        keep = tf.cast(keep, tf.int32)
         class_ids = tf.gather(class_ids, keep)
         class_probs = tf.gather(class_probs, keep)
         class_roi = tf.gather(class_roi, keep)
         unique_class_ids = tf.unique(class_ids)[0]
 
         def nms(curr_id):
-            indices = tf.squeeze(tf.where(tf.equal(class_ids, curr_id)))
+            indices = tf.where(tf.equal(class_ids, curr_id))[:, 0]
             curr_roi = tf.gather(class_roi, indices)
             curr_probs = tf.gather(class_probs, indices)
             class_keep = tf.image.non_max_suppression(
                 curr_roi, curr_probs, self.num_detect, 
                 iou_threshold=self.overlap_thresh)
-            class_keep = tf.gather(keep, tf.gather(indices, class_keep))
-
+            class_keep = tf.gather(indices, class_keep)
+            class_keep = tf.cast(class_keep, tf.int32)
+            
             # Pad with -1 so all classes return same size for stacking
             padding = tf.maximum(self.num_detect-tf.shape(class_keep)[0], 0)
             class_keep = tf.pad(class_keep, [(0, padding)], 'CONSTANT',
@@ -212,7 +213,7 @@ class DetectionLayer(tf.keras.Model):
         # in a single list, filtering out -1 padding we inserted in the mapping
         nms_keep = tf.map_fn(nms, unique_class_ids, dtype=tf.int32)
         nms_keep = tf.reshape(nms_keep, [-1])
-        nms_keep = tf.gather(nms_keep, tf.squeeze(tf.where(nms_keep>-1)))
+        nms_keep = tf.gather(nms_keep, tf.where(nms_keep>-1)[:, 0])
 
         # Keep only top detections, up to num_detect total
         nms_class_probs = tf.gather(class_probs, nms_keep)

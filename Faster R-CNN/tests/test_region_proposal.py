@@ -13,7 +13,7 @@ class TestRPN(tf.test.TestCase):
                        anchors_per_loc=self.anchors_per_loc,
                        anchor_stride=self.anchor_stride)
 
-    def test_rpn_call(self):
+    def test_rpn_dims(self):
         N, H, W, C = 10, 7, 7, 256
         num_anchors = ceil(H/self.anchor_stride)*ceil(W/self.anchor_stride) \
                       *self.anchors_per_loc
