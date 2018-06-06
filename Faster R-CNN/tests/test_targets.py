@@ -1,51 +1,81 @@
-from network.targets import DetectionTargetLayer
+from network.targets import RPNTargetLayer, DetectionTargetLayer
 import numpy as np
 import tensorflow as tf
+from network.utils import bbox_overlap
 
-"""Subsamples proposals and generates target box refinement, class_ids,
-and masks for each.
-Inputs:
-proposals: [batch, N, (y1, x1, y2, x2)] in normalized coordinates. Might
-         be zero padded if there are not enough proposals.
-gt_class_ids: [batch, MAX_GT_INSTANCES] Integer class IDs.
-gt_boxes: [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized
-        coordinates.
-gt_masks: [batch, height, width, MAX_GT_INSTANCES] of boolean type
-Returns: Target ROIs and corresponding class IDs, bounding box shifts,
-and masks.
-rois: [batch, TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized
-    coordinates
-target_class_ids: [batch, TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
-target_deltas: [batch, TRAIN_ROIS_PER_IMAGE, NUM_CLASSES,
-              (dy, dx, log(dh), log(dw), class_id)]
-             Class-specific bbox refinements.
-target_mask: [batch, TRAIN_ROIS_PER_IMAGE, height, width)
-           Masks cropped to bbox boundaries and resized to neural
-           network output size.
-Note: Returned arrays might be zero padded if not enough target ROIs.
-"""
+class TestRPNTargets(tf.test.TestCase):
+    def setUp(self):
+        self.num_train_anchors = 12
+        self.rpn = RPNTargetLayer(num_train_anchors=self.num_train_anchors)
 
-"""
-rois, target_class_ids, target_bbox, target_mask =\
-                DetectionTargetLayer(config, name="proposal_targets")([
-                    target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+    def test_rpn_target_dims(self):
+        N, num_anchors, true_objects = 10, 8*self.num_train_anchors, 3
 
-class_loss = KL.Lambda(lambda x: mrcnn_class_loss_graph(*x), name="mrcnn_class_loss")(
-    [target_class_ids, mrcnn_class_logits, active_class_ids])
-bbox_loss = KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x), name="mrcnn_bbox_loss")(
-    [target_bbox, target_class_ids, mrcnn_bbox])
-"""
+        anchors = tf.convert_to_tensor(
+            np.random.uniform(size=(N, num_anchors, 4)).astype('float32'))
+        true_boxes = tf.convert_to_tensor(
+            np.random.uniform(size=(N, true_objects, 4)).astype('float32'))
+
+        target_run = self.rpn([anchors, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [target_classes, target_deltas] = sess.run(target_run)
+            self.assertAllEqual(target_classes.shape, [N, num_anchors])
+            self.assertAllEqual(target_deltas.shape, [N, num_anchors, 4])
+
+    def test_rpn_target_values(self):
+        anchors = tf.convert_to_tensor(
+            np.array([[[0.21, 0.19, 0.39, 0.41],
+                       [0.25, 0.1, 0.35, 0.4], 
+                       [0.15, 0.15, 0.21, 0.21],
+                       [0.19, 0.21, 0.41, 0.39],
+                       [0.41, 0.49, 0.59, 0.61]]]).astype('float32'))
+        true_boxes = tf.convert_to_tensor(
+            np.array([[[0.2, 0.2, 0.4, 0.4],
+                       [0.4, 0.4, 0.6, 0.6]]]).astype('float32'))
+
+        expect_classes = np.array([[1, -1, 0, 1, 1]])
+
+        expect_deltas = np.zeros((1, 5, 4))
+        expect_deltas[0, 0, :] = [0, 0, 0.105361, -0.095310]
+        expect_deltas[0, 3, :] = [0, 0, -0.095310, 0.105361]
+        expect_deltas[0, 4, :] = [0, -0.416667, 0.105361, 0.510826]
+
+        target_run = self.rpn([anchors, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [target_classes, target_deltas] = sess.run(target_run)
+            self.assertAllClose(target_classes, expect_classes)
+            self.assertAllClose(target_deltas, expect_deltas)
+
+    def test_rpn_fractions(self):
+        pos_anchors = np.tile([[0.21, 0.19, 0.39, 0.41]], [3*self.num_train_anchors, 1])
+        neg_anchors = np.tile([[0.15, 0.15, 0.21, 0.21]], [5*self.num_train_anchors,1])
+        all_anchors = np.concatenate([pos_anchors, neg_anchors])
+        anchors = tf.convert_to_tensor(all_anchors[None, :].astype('float32'))
+        true_boxes = tf.convert_to_tensor(
+            np.array([[[0.2, 0.2, 0.4, 0.4]]]).astype('float32'))
+
+        target_run = self.rpn([anchors, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [target_classes, target_deltas] = sess.run(target_run)
+            num_pos_train = target_classes[target_classes>0].size
+            num_tot_train = target_classes[target_classes>-1].size
+            self.assertEqual(num_tot_train, self.num_train_anchors)
+            self.assertEqual(num_pos_train, num_tot_train//2)
 
 
 class TestDetectionTargets(tf.test.TestCase):
     def setUp(self):
-        self.num_train_roi = 10
+        self.num_train_roi = 20
+        self.fraction_pos_roi = 0.3
         self.num_classes = 5
         self.det = DetectionTargetLayer(
-            num_train_roi=self.num_train_roi, fraction_pos_roi=0.3,
+            num_train_roi=self.num_train_roi, fraction_pos_roi=self.fraction_pos_roi,
             truth_overlap_thresh=0.5)
 
-    def test_detection_target_dims(self):
+    def test_detection_target_dims_and_range(self):
         N, num_roi, true_objects = 10, 10*self.num_train_roi, 2
 
         input_roi = tf.convert_to_tensor(
@@ -60,10 +90,8 @@ class TestDetectionTargets(tf.test.TestCase):
             [output_roi, target_classes, target_deltas] = sess.run(target_run)
             self.assertAllEqual(output_roi.shape, [N, self.num_train_roi, 4])
             self.assertAllEqual(target_classes.shape, [N, self.num_train_roi])
-            self.assertAllEqual(target_deltas.shape, 
-                                [N, self.num_train_roi, 4])
 
-    def test_single_target(self):
+    def test_detection_target(self):
         input_roi = tf.convert_to_tensor(
             np.array([[[0.1, 0.25, 0.3, 0.55], 
                        [0.18, 0.18, 0.35, 0.41]]]).astype('float32'))
@@ -80,7 +108,7 @@ class TestDetectionTargets(tf.test.TestCase):
         expect_classes[0, 1] = 0
 
         expect_deltas = np.zeros((1, self.num_train_roi, 4))
-        expect_deltas[0, 0, :] = [0.205882,0.0217391, 0.162519, -0.139762]
+        expect_deltas[0, 0, :] = [0.205882, 0.0217391, 0.162519, -0.139762]
 
         target_run = self.det([input_roi, true_classes, true_boxes])
         with self.test_session() as sess:
@@ -89,4 +117,22 @@ class TestDetectionTargets(tf.test.TestCase):
             self.assertAllClose(output_roi, expect_roi)
             self.assertAllClose(target_classes, expect_classes)
             self.assertAllClose(target_deltas, expect_deltas)
+
+    def test_detection_fractions(self):
+        pos_roi = np.tile([[0.21, 0.19, 0.39, 0.41]], [3*self.num_train_roi, 1])
+        neg_roi = np.tile([[0.15, 0.15, 0.21, 0.21]], [5*self.num_train_roi,1])
+        all_roi = np.concatenate([pos_roi, neg_roi])
+        input_roi = tf.convert_to_tensor(all_roi[None, :].astype('float32'))
+        true_classes = tf.convert_to_tensor(np.array([[3]]).astype('int32'))
+        true_boxes = tf.convert_to_tensor(
+            np.array([[[0.2, 0.2, 0.4, 0.4]]]).astype('float32'))
             
+        target_run = self.det([input_roi, true_classes, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [output_roi, target_classes, target_deltas] = sess.run(target_run)
+            num_pos_train = target_classes[target_classes>0].size
+            num_tot_train = target_classes[target_classes>-1].size
+            self.assertEqual(num_tot_train, self.num_train_roi)
+            self.assertAlmostEqual(num_pos_train/num_tot_train, 
+                                   self.fraction_pos_roi, places=2)

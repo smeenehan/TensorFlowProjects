@@ -55,9 +55,9 @@ class RPN(tf.keras.Model):
         Returns
         -------
         list of tensors
-            logits, probabilities, and bounding boxes for each anchor, dimensions
-            [N, num_anchors, 2], [N, num_anchors, 2], [N, num_anchors, 4],
-            respectively.
+            logits, probabilities, and bounding box deltas for each anchor, 
+            dimensions [N, num_anchors, 2], [N, num_anchors, (bg_prob, fg_prob)], 
+            [N, num_anchors, (dy, dx, log(dh), log(dw))], respectively.
         """
         num_batch = tf.shape(input_data)[0]
         x = self.shared(input_data)
