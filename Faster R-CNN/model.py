@@ -1,78 +1,67 @@
-from backbone import ResNet
-from region_proposal import RPN, ProposalLayer
-from roi_classifier import ROIAlign, ROIHead
+from network.backbone import ResNet
+from network.losses import bbox_loss, class_loss
+from network.region_proposal import RPN, ProposalLayer
+from network.roi_classifier import ROIAlign, ROIHead, DetectionLayer
+from network.targets import RPNTargetLayer, DetectionTargetLayer
+from network.utils import generate_anchors, update_bboxes_batch
 import tensorflow as tf
-from utils import generate_anchors
 
 def model_fn(features, labels, mode, params, config):
     """
     Parameters
     ----------
-    features : Tensor or dictionary
-        Feature or dictionary mapping names to feature Tensors.
-    labels : Tensor or dictionary
-        Label for the feature, or dictionary mapping names to label Tensors.
+    features : tensor 
+        Image batch, in NHWC format.
+    labels : tensor
+        Ground-truth classes and bounding boxes for the image batch.
     mode : string
         ModeKey specifying whether we are in training/evaluation/prediction mode.
     params : dictionary
         Hyperparameters for the model.
     config : config object
         Runtime configuration of the Estimator calling us. Used to set up custom
-        saver hooks
+        saver hooks.
 
     Returns
     -------
     EstimatorSpec
     """
-    data_format = params.get('data_format', 'channels_first')
-    anchor_stride = params.get('anchor_stride', 1)
-    anchor_scales = params.get('anchor_scales', [32, 64, 128])
-    anchor_ratios = params.get('anchor_ratios', [0.5, 1.0, 1.5])
-    num_anchors = len(anchor_stride)*len(anchor_ratios)
-    backbone = ResNet(data_format, num_blocks=[3, 4, 6, 3], include_fc=False)
-    rpn_graph = RPN(data_format, anchors_per_loc=num_anchors, 
-                    anchor_stride=anchor_stride)
-    proposer = ProposalLayer()
-    roi_align = ROIAlign()
-    roi_head = ROIHead(data_format)
-
-    image = features
-    if isinstance(image, dict):
-        image = features['image']
+    images = features
+    true_classes, true_bboxes = features
     training = mode is tf.estimator.ModeKeys.TRAIN
-
-    feature_maps = backbone(image, training=training)
-    rpn_logits, rpn_probs, rpn_boxes = rpn_graph(feature_maps, training=training)
-    with tf.name_scope('anchor_gen'):
-        anchors = generate_anchors(
-            anchor_scales, anchor_ratios, tf.shape(image)[1:3], 
-            tf.shape(feature_maps)[1:3], anchor_stride)
-        anchors = tf.tile(tf.expand_dims(anchors, 0), [tf.shape(images)[0], 1, 1])
-    roi = proposer([rpn_probs, rpn_boxes, anchors])
-    roi_features = roi_align([feature_maps, roi])
-    roi_logits, roi_bboxes = roi_head(roi_features)
+    predict = mode is tf.estimator.ModeKeys.PREDICT
+    outputs = build_network(images, true_classes, true_bboxes, params, training,
+                            predict)
     
-    classes = tf.argmax(logits, axis=1, output_type=tf.int32, name='predictions')
+    if predict:
+        detections = outputs['detect']
+        predictions = {'bboxes': detections[:, :, :4],
+                       'classes': detections[:, :, 4],
+                       'probabilities': detections[:, :, 5]}
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
-    if mode is tf.estimator.ModeKeys.PREDICT:
-        predictions = {'classes': classes, 'probabilities': tf.nn.softmax(logits)}
-        return tf.estimator.EstimatorSpec(
-            mode=mode, predictions=predictions)
+    rpn_logits, rpn_deltas = outputs['rpn']
+    rpn_target_classes, rpn_target_deltas = outputs['rpn_targets']
+    with tf.name_scope('rpn_loss'):
+        rpn_class_loss = class_loss(rpn_logits, rpn_target_classes)
+        rpn_bbox_loss = bbox_loss(rpn_deltas, rpn_target_classes, rpn_target_deltas)
+        rpn_loss = rpn_class_loss+10*rpn_bbox_loss
+    tf.summary.scalar('rpn_loss', rpn_loss)
 
-    with tf.name_scope('loss_op'):
-        loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits) \
-              +tf.losses.get_regularization_loss()
-    tf.summary.scalar('loss', loss)
+    roi_targets, roi_logits, roi_deltas = outputs['roi']
+    roi_target_classes, roi_target_deltas = outputs['roi_targets']
+    with tf.name_scope('roi_loss'):
+        roi_class_loss = class_loss(roi_logits, roi_target_classes)
+        roi_bbox_loss = bbox_loss(roi_deltas, roi_target_classes, roi_target_deltas)
+        roi_loss = roi_class_loss+10*oin_bbox_loss
+    tf.summary.scalar('roi_loss', roi_loss)
 
-    accuracy = tf.metrics.accuracy(labels=labels, 
-                                   predictions=classes, name='accuracy_op')
-    tf.summary.scalar('accuracy', accuracy[1])
+    with tf.name_scope('total_loss'):
+        total_loss = rpn_loss+roi_loss+tf.losses.get_regularization_loss()
+    tf.summary.scalar('total_loss', total_loss)
 
     if mode is tf.estimator.ModeKeys.EVAL:
-        return tf.estimator.EstimatorSpec(mode=mode, loss=loss, 
-                                          eval_metric_ops={'accuracy': accuracy})
-    
-    init_from_checkpoints(params, backbone.name)
+        return tf.estimator.EstimatorSpec(mode=mode, loss=total_loss)
 
     learning_rate = params.get('learning_rate', 0.01)
     momentum = params.get('momentum', 0.9)
@@ -90,7 +79,7 @@ def model_fn(features, labels, mode, params, config):
             learning_rate=learn_rate, momentum=momentum, use_nesterov=True)
 
         with tf.control_dependencies(extra_update_ops):
-            train_op = optimizer.minimize(loss, global_step)
+            train_op = optimizer.minimize(total_loss, global_step)
 
     train_spec = tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
@@ -102,6 +91,82 @@ def model_fn(features, labels, mode, params, config):
     train_spec = train_spec._replace(training_chief_hooks=[save_hook])
 
     return train_spec
+
+def build_network(images, true_classes, true_bboxes, params, training, predict):
+    """
+    Parameters
+    ----------
+    images : tensor 
+        Image batch, in NHWC format.
+    true_classes : tensor
+        Ground-truth classes and bounding boxes for the image batches
+    true_bboxes : string
+        ModeKey specifying whether we are in training/evaluation/prediction mode.
+    params : dictionary
+        Hyperparameters for the model.
+    training : bool
+        True if we are in training mode.
+    predict : bool
+        True if we are in prediction mode.
+
+    Returns
+    -------
+    dictionary of tensors
+        Always contains the keys 'rpn' = [logits, deltas] from the region 
+        proposal stage, and 'roi' = [target_boxes, logits, deltas] from the ROI 
+        classier stage. In training mode, also includes 'rpn_targets' and 
+        'roi_targets', each of which is a list of target classes and box deltas 
+        for the two stages. In prediction mode, contains the key 'detect', which
+        returns the filtered detections from the ROI classifier stage.
+    """
+    backbone = ResNet('channels_last', num_blocks=[3, 4, 6, 3], include_fc=False)
+    feature_maps = backbone(images, training=training)
+
+    anchor_stride = params.get('anchor_stride', 1)
+    anchor_scales = params.get('anchor_scales', [32, 64, 128])
+    anchor_ratios = params.get('anchor_ratios', [0.5, 1.0, 1.5])
+    num_anchors = len(anchor_stride)*len(anchor_ratios)
+    rpn_graph = RPN('channels_last', anchors_per_loc=num_anchors, 
+                    anchor_stride=anchor_stride)
+    rpn_logits, rpn_probs, rpn_deltas = rpn_graph(feature_maps, training=training)
+    return_dict = {'rpn': [rpn_logits, rpn_deltas]}
+
+    with tf.name_scope('anchor_gen'):
+        anchors = generate_anchors(
+            anchor_scales, anchor_ratios, tf.shape(images)[1:3], 
+            tf.shape(feature_maps)[1:3], anchor_stride)
+        anchors = tf.tile(tf.expand_dims(anchors, 0), [tf.shape(images)[0], 1, 1])
+
+    proposer = ProposalLayer()
+    roi_proposals = proposer([rpn_probs, rpn_boxes, anchors])
+
+    if training:
+        rpn_target = RPNTargetLayer()
+        rpn_target_classes, rpn_target_deltas = rpn_target([anchors, true_bboxes])
+
+        det_target = DetectionTargetLayer()
+        roi_targets, roi_target_classes, roi_target_deltas = det_target(
+            [roi_proposals, true_classes, true_bboxes])
+
+        return_dict['rpn_targets'] = [rpn_target_classes, rpn_target_deltas]
+        return_dict['roi_targets'] = [roi_target_classes, roi_target_deltas]
+    else:
+        roi_targets = roi_proposals
+
+    roi_align = ROIAlign()
+    roi_features = roi_align([feature_maps, roi_targets])
+
+    roi_head = ROIHead('channels_last')
+    roi_logits, roi_deltas = roi_head(roi_features)
+    return_dict['roi'] = [roi_targets, roi_logits, roi_deltas]
+
+    if predict:
+        roi_probs = tf.nn.softmax(roi_logits)
+        detect = DetectionLayer()
+        detected_objects = detect([roi_targets, roi_probs, roi_deltas])
+        return_dict['detect'] = detected_objects
+
+    return return_dict
 
 def init_from_checkpoints(params, backbone_name):
     backbone_ckpt = params.get('backbone_ckpt', None)

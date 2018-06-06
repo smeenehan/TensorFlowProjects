@@ -1,7 +1,6 @@
 from network.targets import RPNTargetLayer, DetectionTargetLayer
 import numpy as np
 import tensorflow as tf
-from network.utils import bbox_overlap
 
 class TestRPNTargets(tf.test.TestCase):
     def setUp(self):

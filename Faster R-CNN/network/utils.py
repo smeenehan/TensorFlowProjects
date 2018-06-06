@@ -81,6 +81,25 @@ def update_bboxes(boxes, deltas):
     x2 = x1+width
     return tf.stack([y1, x1, y2, x2], axis=1, name='updated_bboxes')
 
+def update_bboxes_batch(boxes, deltas):
+    """Apply bounding box refinements to a whole batch.
+    """
+    height = boxes[:, :, 2]-boxes[:, :, 0]
+    center_y = boxes[:, :, 0]+0.5*height
+    width = boxes[:, :, 3]-boxes[:, :, 1]
+    center_x = boxes[:, :, 1]+0.5*width
+
+    center_y += deltas[:, :, 0]*height
+    center_x += deltas[:, :, 1]*width
+    height *= tf.exp(deltas[:, :, 2])
+    width *= tf.exp(deltas[:, :, 3])
+
+    y1 = center_y-0.5*height
+    x1 = center_x-0.5*width
+    y2 = y1+height
+    x2 = x1+width
+    return tf.stack([y1, x1, y2, x2], axis=2, name='updated_bboxes')
+
 def bbox_overlap(boxes_1, boxes_2):
     """Compute overlap (IoU metric) of two bounding boxes
 
