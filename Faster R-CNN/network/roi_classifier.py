@@ -212,6 +212,8 @@ class DetectionLayer(tf.keras.Model):
         # Filter ROI for each class with NMS, up to num_detect per class, and put
         # in a single list, filtering out -1 padding we inserted in the mapping
         nms_keep = tf.map_fn(nms, unique_class_ids, dtype=tf.int32)
+        # if unique_class_ids is empty, nms_keep would default to float
+        nms_keep = tf.cast(nms_keep, tf.int32)
         nms_keep = tf.reshape(nms_keep, [-1])
         nms_keep = tf.gather(nms_keep, tf.where(nms_keep>-1)[:, 0])
 

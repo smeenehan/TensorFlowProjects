@@ -33,6 +33,10 @@ def bbox_loss(deltas, labels, target_deltas):
 def class_loss(logits, labels):
     """Compute class loss for anchor or ROI targets.
 
+    Note that, as in the original Faster R-CNN paper, we normalize the loss
+    of each image by the total number of anchors, not just the number of examples
+    used to calculate the loss.
+
     Parameters
     ----------
     logits : tensor

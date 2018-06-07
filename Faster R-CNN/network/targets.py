@@ -60,7 +60,6 @@ class RPNTargetLayer(tf.keras.Model):
     def _get_target_classes(self, overlaps):
         num_anchors = tf.shape(overlaps)[0]
         target_classes = -1*tf.ones([num_anchors], dtype=tf.int32)
-        # overlaps = bbox_overlap(anchors, true_bboxes)
 
         # Set background/negative bounding boxes (IoU<0.3 for all ground-truth)
         iou_max_class = tf.argmax(overlaps, axis=1, output_type=tf.int32)
@@ -164,10 +163,22 @@ class DetectionTargetLayer(tf.keras.Model):
 
         overlaps = bbox_overlap(proposals, true_bboxes)
 
-        # Determine positive and negative ROIs, based on ground-truth IoU overlap
+        # Determine positive ROIs, based on ground-truth IoU overlap
         proposal_iou_max = tf.reduce_max(overlaps, axis=1)
         pos_indices = tf.where(proposal_iou_max>=self.truth_overlap_thresh)[:, 0]
-        neg_indices = tf.where(proposal_iou_max<1-self.truth_overlap_thresh)[:, 0]
+        pos_indices = tf.cast(pos_indices, tf.int32)
+        
+        # Ensure each ground-truth box has at least one associated roi
+        iou_max_roi = tf.argmax(overlaps, axis=0, output_type=tf.int32)
+        pos_indices = tf.concat([pos_indices, iou_max_roi], 0)
+        pos_indices, _ = tf.unique(pos_indices)
+
+        # Make sure that if a ROI is already positive, it can't be negative (e.g.,
+        # if an ROI is only positive b/c it is the max overlap with a thruth box)
+        pos_already = tf.scatter_nd(pos_indices[:, None], tf.ones_like(pos_indices),
+                                    tf.shape(proposal_iou_max))
+        neg_indices = tf.where((proposal_iou_max<1-self.truth_overlap_thresh) &
+                               (pos_already<1))[:, 0]
 
         # Maintain the right fraction of positive/negative, even if we don't have
         # enough positive samples (we will zero pad at the end) 

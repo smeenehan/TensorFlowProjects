@@ -93,7 +93,7 @@ class TestDetectionLayer(tf.test.TestCase):
             self.assertTrue(np.all(large_det_result[:, :, 4]<=self.num_classes*np.ones_like(large_det_result[:, :, 4])))
             self.assertTrue(np.all(large_det_result[:, :, 5]<=np.ones_like(large_det_result[:, :, 5])))
 
-    def test_null_detection(self):
+    def test_background_detection(self):
         N, num_roi = 15, 2*self.num_detect
         expected = np.zeros((N, self.num_detect, 6))
 
@@ -112,14 +112,14 @@ class TestDetectionLayer(tf.test.TestCase):
             self.assertAllClose(null_det_result, expected)
 
     def test_nms_and_pad(self):
-        roi = np.array([[[0.25, 0.25, 0.75, 0.75],
-                         [0, 0, 0.25, 0.25],
+        roi = np.array([[[0, 0, 0.25, 0.25],
+                         [0.25, 0.25, 0.75, 0.75],
                          [0.75, 0.75, 1, 1],
                          [0.275, 0.275, 0.775, 0.775]]]).astype('float32')
         roi = tf.convert_to_tensor(roi)
         probs = tf.convert_to_tensor(
-            np.array([[[0, 0.8, 0.15, 0.05, 0], 
-                       [0.1, 0.2, 0.4, 0.15, 0.15], 
+            np.array([[[0.1, 0.2, 0.4, 0.15, 0.15], 
+                       [0, 0.8, 0.15, 0.05, 0], 
                        [1, 0, 0, 0, 0],
                        [0, 0.7, 0, 0, 0.3]]]).astype('float32'))
         deltas = tf.convert_to_tensor(np.zeros((1, 4, 5, 4)).astype('float32'))
@@ -131,4 +131,3 @@ class TestDetectionLayer(tf.test.TestCase):
             sess.run(tf.global_variables_initializer())
             pos_det_result = sess.run(pos_det)
             self.assertAllClose(pos_det_result, expected)
-           

@@ -135,3 +135,33 @@ class TestDetectionTargets(tf.test.TestCase):
             self.assertEqual(num_tot_train, self.num_train_roi)
             self.assertAlmostEqual(num_pos_train/num_tot_train, 
                                    self.fraction_pos_roi, places=2)
+
+    def test_no_pos_detections(self):
+        input_roi = tf.convert_to_tensor(
+            np.array([[[0.1, 0.2, 0.3, 0.5], 
+                       [0.6, 0.7, 0.8, 0.8]]]).astype('float32'))
+        true_classes = tf.convert_to_tensor(np.array([[3, 4]]).astype('int32'))
+        true_boxes = tf.convert_to_tensor(
+            np.array([[[0.25, 0.45, 0.35, 0.55],
+                       [0.55, 0.65, 0.65, 0.75]]]).astype('float32'))
+
+        expect_roi = np.zeros((1, self.num_train_roi, 4))
+        expect_roi[0, 0, :] = [0.6, 0.7, 0.8, 0.8]
+        expect_roi[0, 1, :] = [0.1, 0.2, 0.3, 0.5]
+
+        expect_classes = -1*np.ones((1, self.num_train_roi))
+        expect_classes[0, 0] = 4
+        expect_classes[0, 1] = 3
+
+        expect_deltas = np.zeros((1, self.num_train_roi, 4))
+        expect_deltas[0, 0, :] = [-0.5, -0.5, -0.693147, 0]
+        expect_deltas[0, 1, :] = [0.5, 0.5, -0.693147, -1.098612]
+
+        target_run = self.det([input_roi, true_classes, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [output_roi, target_classes, target_deltas] = sess.run(target_run)
+            sort_inds = np.flipud(np.argsort(target_classes[0, :]))
+            self.assertAllClose(output_roi[:, sort_inds, :], expect_roi)
+            self.assertAllClose(target_classes[:, sort_inds], expect_classes)
+            self.assertAllClose(target_deltas[:, sort_inds, :], expect_deltas)
