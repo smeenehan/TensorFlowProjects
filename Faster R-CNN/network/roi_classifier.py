@@ -70,7 +70,7 @@ class ROIHead(tf.keras.Model):
         None.
     """
     def __init__(self, data_format, pool_shape=[7, 7], num_channels=256, 
-                 num_classes=20, hidden_dim=1024, regularizer=None,):
+                 num_classes=21, hidden_dim=1024, regularizer=None,):
         super().__init__()
         self.conv = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
             num_channels, pool_shape, data_format=data_format, use_bias=False, 

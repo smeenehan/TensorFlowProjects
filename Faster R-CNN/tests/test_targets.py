@@ -7,7 +7,7 @@ class TestRPNTargets(tf.test.TestCase):
         self.num_train_anchors = 12
         self.rpn = RPNTargetLayer(num_train_anchors=self.num_train_anchors)
 
-    def test_rpn_target_dims(self):
+    def test_rpn_target_dims_and_range(self):
         N, num_anchors, true_objects = 10, 8*self.num_train_anchors, 3
 
         anchors = tf.convert_to_tensor(
@@ -20,6 +20,8 @@ class TestRPNTargets(tf.test.TestCase):
             sess.run(tf.global_variables_initializer())
             [target_classes, target_deltas] = sess.run(target_run)
             self.assertAllEqual(target_classes.shape, [N, num_anchors])
+            self.assertTrue(np.all(target_classes<=np.ones_like(target_classes)))
+            self.assertTrue(np.all(target_classes>=-1*np.ones_like(target_classes)))
             self.assertAllEqual(target_deltas.shape, [N, num_anchors, 4])
 
     def test_rpn_target_values(self):

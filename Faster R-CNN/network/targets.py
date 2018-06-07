@@ -15,12 +15,6 @@ class RPNTargetLayer(tf.keras.Model):
     ----------
     num_train_anchors : int
         Maximum number of training samples in a single image. Defaults to  64.
-    fraction_pos_roi : float
-        We will try to ensure that this fraction of num_train_roi are "positive"
-        examples (i.e., substantially overlap a ground-truth box). Defaults to 0.5.
-    truth_overlap_thresh : float
-        Threshold (in terms of IoU) determining whether an ROI overlaps enough with
-        a ground-truth box to count as positive. Defaults to 0.7.
     """
     def __init__(self, num_train_anchors=64):
         super().__init__()
@@ -71,7 +65,8 @@ class RPNTargetLayer(tf.keras.Model):
         iou_max_anchor = tf.argmax(overlaps, axis=0, output_type=tf.int32)
         pos_anchors = tf.scatter_nd(iou_max_anchor[:, None], 
             tf.ones_like(iou_max_anchor), tf.shape(target_classes))
-        target_classes = tf.where(pos_anchors>0, pos_anchors, target_classes)
+        target_classes = tf.where(pos_anchors>0, tf.ones_like(pos_anchors), 
+                                  target_classes)
 
         # Set foreground/positive bounding boxes (IoU>0.7 for some ground-truth)
         return tf.where(iou_max_val>=0.7, tf.ones([num_anchors], dtype=tf.int32), 
