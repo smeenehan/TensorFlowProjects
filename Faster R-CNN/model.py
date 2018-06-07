@@ -48,6 +48,8 @@ def model_fn(features, labels, mode, params, config):
     if mode is tf.estimator.ModeKeys.EVAL:
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss)
 
+    init_backbone(params)
+
     learning_rate = params.get('learning_rate', 0.01)
     momentum = params.get('momentum', 0.9)
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -185,13 +187,14 @@ def setup_loss(outputs):
     tf.summary.scalar('total_loss', total_loss)
     return total_loss
 
-def init_from_checkpoints(params, backbone_name):
+def init_backbone(params, backbone_name='res_net'):
     backbone_ckpt = params.get('backbone_ckpt', None)
-    if backbone_ckpt is not None:
-        backbone_var_dict = {}
-        for key, item in resnet_var_dict.items():
-            if 'dense' in key:
-                continue
-            new_item = item.replace('res_net', backbone_name)
-            backbone_var_dict[key] = new_item
-        tf.train.init_from_checkpoint(backbone_ckpt, backbone_var_dict)
+    if backbone_ckpt is None:
+        return
+    backbone_var_dict = {}
+    for key, item in resnet_var_dict.items():
+        if 'dense' in key:
+            continue
+        new_item = item.replace('res_net', backbone_name)
+        backbone_var_dict[key] = new_item
+    tf.train.init_from_checkpoint(backbone_ckpt, backbone_var_dict)
