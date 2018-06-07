@@ -6,7 +6,7 @@ import numpy as np
 BOX_COLORS = ['red', 'blue', 'green', 'cyan', 'magenta']
 
 def show_detections(image, bboxes, class_ids, class_names):
-    image_detect = image.astype('uint32').copy()
+    image_detect = image.astype('uint8').copy()
     _, ax = plt.subplots()
     ax.axis('off')
     ax.imshow(image_detect)
