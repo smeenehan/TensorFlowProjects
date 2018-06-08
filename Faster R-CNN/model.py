@@ -5,6 +5,7 @@ from network.region_proposal import RPN, ProposalLayer
 from network.roi_classifier import ROIAlign, ROIHead, DetectionLayer
 from network.targets import RPNTargetLayer, DetectionTargetLayer
 from network.utils import generate_anchors, update_bboxes_batch
+from resnet_var_dict import resnet_var_dict
 import tensorflow as tf
 
 def model_fn(features, labels, mode, params, config):
