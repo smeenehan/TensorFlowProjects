@@ -108,7 +108,11 @@ def build_network(images, true_classes, true_bboxes, params, training):
         for the two stages. In prediction mode, contains the key 'detect', which
         returns the filtered detections from the ROI classifier stage.
     """
-    backbone = ResNet('channels_last', num_blocks=[3, 4, 6, 3], include_fc=False)
+    reg_scale = params.get('reg_scale', 0.0005)
+    regularizer = tf.keras.regularizers.l2(l=reg_scale)
+
+    backbone = ResNet('channels_last', num_blocks=[3, 4, 6, 3], include_fc=False,
+                      regularizer=regularizer)
     feature_maps = backbone(images, training=training)
 
     anchor_stride = params.get('anchor_stride', 1)
@@ -116,7 +120,7 @@ def build_network(images, true_classes, true_bboxes, params, training):
     anchor_ratios = params.get('anchor_ratios', [0.5, 1.0, 1.5])
     num_anchors = len(anchor_scales)*len(anchor_ratios)
     rpn_graph = RPN('channels_last', anchors_per_loc=num_anchors, 
-                    anchor_stride=anchor_stride)
+                    anchor_stride=anchor_stride, regularizer=regularizer)
     rpn_logits, rpn_probs, rpn_deltas = rpn_graph(feature_maps, training=training)
     return_dict = {'rpn': [rpn_logits, rpn_deltas]}
 
@@ -145,7 +149,7 @@ def build_network(images, true_classes, true_bboxes, params, training):
     roi_align = ROIAlign()
     roi_features = roi_align([feature_maps, roi_targets])
 
-    roi_head = ROIHead('channels_last')
+    roi_head = ROIHead('channels_last', regularizer=regularizer)
     roi_logits, roi_probs, roi_deltas = roi_head(roi_features)
     return_dict['roi'] = [roi_targets, roi_logits, roi_deltas]
 
