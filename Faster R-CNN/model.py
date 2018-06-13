@@ -35,21 +35,22 @@ def model_fn(features, labels, mode, params, config):
     predict = mode is tf.estimator.ModeKeys.PREDICT
     outputs = build_network(images, true_classes, true_bboxes, params, training,
                             predict)
-    
-    if mode is tf.estimator.ModeKeys.PREDICT:
+    if not training:
         detections = outputs['detect']
-        predictions = {'bboxes': detections[:, :, :4],
-                       'classes': detections[:, :, 4],
-                       'probabilities': detections[:, :, 5]}
+        bboxes = detections[:, :, :4]
+        classes = tf.cast(detections[:, :, 4], tf.int32)
+        probabilities = detections[:, :, 5]
+
+    if predict:
+        predictions = {'bboxes': bboxes, 'classes': classes,
+                       'probabilities': probabilities}
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
     loss = setup_loss(outputs)
 
     if mode is tf.estimator.ModeKeys.EVAL:
         with tf.name_scope('compute_f1_score'):
-            detections = outputs['detect']
-            f1_value = f1_score(detections[:, :, 4], detections[:, :, :4],
-                                true_classes, true_bboxes)
+            f1_value = f1_score(classes, bboxes, true_classes, true_bboxes)
         accuracy = tf.summary.scalar('f1_score', f1_value)
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss,
                                           eval_metric_ops={'accuracy': accuracy})
