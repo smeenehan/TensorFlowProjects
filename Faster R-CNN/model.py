@@ -32,7 +32,9 @@ def model_fn(features, labels, mode, params, config):
     true_classes = labels['classes']
     true_bboxes = labels['bboxes']
     training = mode is tf.estimator.ModeKeys.TRAIN
-    outputs = build_network(images, true_classes, true_bboxes, params, training)
+    predict = mode is tf.estimator.ModeKeys.PREDICT
+    outputs = build_network(images, true_classes, true_bboxes, params, training,
+                            predict)
     
     if mode is tf.estimator.ModeKeys.PREDICT:
         detections = outputs['detect']
@@ -83,7 +85,7 @@ def model_fn(features, labels, mode, params, config):
 
     return train_spec
 
-def build_network(images, true_classes, true_bboxes, params, training):
+def build_network(images, true_classes, true_bboxes, params, training, predict):
     """
     Parameters
     ----------
@@ -97,6 +99,8 @@ def build_network(images, true_classes, true_bboxes, params, training):
         Hyperparameters for the model.
     training : bool
         True if we are in training mode.
+    predict : bool
+        True if we are in prediction mode.
 
     Returns
     -------
@@ -133,7 +137,7 @@ def build_network(images, true_classes, true_bboxes, params, training):
     proposer = ProposalLayer()
     roi_proposals = proposer([rpn_probs, rpn_deltas, anchors])
 
-    if training:
+    if not predict:
         rpn_target = RPNTargetLayer()
         rpn_target_classes, rpn_target_deltas = rpn_target([anchors, true_bboxes])
 
