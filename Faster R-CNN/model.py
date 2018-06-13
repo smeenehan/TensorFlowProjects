@@ -31,7 +31,6 @@ def model_fn(features, labels, mode, params, config):
     images = features
     true_classes = labels['classes']
     true_bboxes = labels['bboxes']
-    # true_classes, true_bboxes = features
     training = mode is tf.estimator.ModeKeys.TRAIN
     predict = mode is tf.estimator.ModeKeys.PREDICT
     outputs = build_network(images, true_classes, true_bboxes, params, training,
