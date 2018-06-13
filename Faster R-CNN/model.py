@@ -1,6 +1,6 @@
 from custom_session_run_hooks import CustomCheckpointSaverHook
 from network.backbone import ResNet
-from network.losses import bbox_loss, class_loss
+from network.metrics import bbox_loss, class_loss, f1_score
 from network.region_proposal import RPN, ProposalLayer
 from network.roi_classifier import ROIAlign, ROIHead, DetectionLayer
 from network.targets import RPNTargetLayer, DetectionTargetLayer
@@ -32,11 +32,9 @@ def model_fn(features, labels, mode, params, config):
     true_classes = labels['classes']
     true_bboxes = labels['bboxes']
     training = mode is tf.estimator.ModeKeys.TRAIN
-    predict = mode is tf.estimator.ModeKeys.PREDICT
-    outputs = build_network(images, true_classes, true_bboxes, params, training,
-                            predict)
+    outputs = build_network(images, true_classes, true_bboxes, params, training)
     
-    if predict:
+    if mode is tf.estimator.ModeKeys.PREDICT:
         detections = outputs['detect']
         predictions = {'bboxes': detections[:, :, :4],
                        'classes': detections[:, :, 4],
@@ -46,7 +44,13 @@ def model_fn(features, labels, mode, params, config):
     loss = setup_loss(outputs)
 
     if mode is tf.estimator.ModeKeys.EVAL:
-        return tf.estimator.EstimatorSpec(mode=mode, loss=loss)
+        with tf.name_scope('compute_f1_score'):
+            detections = outputs['detect']
+            f1_value = f1_score(detections[:, :, 4], detections[:, :, :4],
+                                true_classes, true_bboxes)
+        accuracy = tf.summary.scalar('f1_score', f1_value)
+        return tf.estimator.EstimatorSpec(mode=mode, loss=loss,
+                                          eval_metric_ops={'accuracy': accuracy})
 
     init_backbone(params)
 
@@ -79,7 +83,7 @@ def model_fn(features, labels, mode, params, config):
 
     return train_spec
 
-def build_network(images, true_classes, true_bboxes, params, training, predict):
+def build_network(images, true_classes, true_bboxes, params, training):
     """
     Parameters
     ----------
@@ -93,8 +97,6 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
         Hyperparameters for the model.
     training : bool
         True if we are in training mode.
-    predict : bool
-        True if we are in prediction mode.
 
     Returns
     -------
@@ -147,7 +149,7 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
     roi_logits, roi_probs, roi_deltas = roi_head(roi_features)
     return_dict['roi'] = [roi_targets, roi_logits, roi_deltas]
 
-    if predict:
+    if not training:
         detect = DetectionLayer()
         detected_objects = detect([roi_targets, roi_probs, roi_deltas])
         return_dict['detect'] = detected_objects
@@ -157,7 +159,7 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
 def setup_loss(outputs):
     rpn_logits, rpn_deltas = outputs['rpn']
     rpn_target_classes, rpn_target_deltas = outputs['rpn_targets']
-    with tf.name_scope('rpn_loss'):
+    with tf.name_scope('compute_rpn_loss'):
         rpn_class_loss = class_loss(rpn_logits, rpn_target_classes)
         rpn_bbox_loss = bbox_loss(rpn_deltas, rpn_target_classes, rpn_target_deltas)
         rpn_loss = rpn_class_loss+10*rpn_bbox_loss
@@ -175,14 +177,14 @@ def setup_loss(outputs):
         indices = tf.stack([batch_inds, roi_inds, class_inds, delta_inds], axis=3)
         reduced_roi_deltas = tf.gather_nd(roi_deltas, indices)
 
-    with tf.name_scope('roi_loss'):
+    with tf.name_scope('compute_roi_loss'):
         roi_class_loss = class_loss(roi_logits, roi_target_classes)
         roi_bbox_loss = bbox_loss(reduced_roi_deltas, roi_target_classes, 
                                   roi_target_deltas)
         roi_loss = roi_class_loss+10*roi_bbox_loss
     tf.summary.scalar('roi_loss', roi_loss)
 
-    with tf.name_scope('total_loss'):
+    with tf.name_scope('compute_total_loss'):
         total_loss = rpn_loss+roi_loss+tf.losses.get_regularization_loss()
     tf.summary.scalar('total_loss', total_loss)
     return total_loss

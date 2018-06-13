@@ -122,7 +122,7 @@ class DetectionLayer(tf.keras.Model):
     Parameters
     ----------
     num_detect : int
-        Maximum number of objects to detect per image. Default to 25.
+        Maximum number of objects to detect per image. Default to 100.
     prob_thresh : float
         Threshold probability (confidence) to consider a non-background ROI a 
         true object. Should be between 0 and 1. Defaults to 0.7
@@ -130,7 +130,7 @@ class DetectionLayer(tf.keras.Model):
         Threshold for deciding if proposals overlap (with respect to the IoU
         metric), during the non-max suppression stage. Defaults to 0.3.
     """
-    def __init__(self, num_detect=25, prob_thresh=0.7, overlap_thresh=0.3):
+    def __init__(self, num_detect=100, prob_thresh=0.7, overlap_thresh=0.3):
         super().__init__()
         self.num_detect = num_detect        
         self.prob_thresh = prob_thresh

@@ -1,8 +1,8 @@
-from network.losses import bbox_loss, class_loss
+from network.metrics import bbox_loss, class_loss, f1_score
 import numpy as np
 import tensorflow as tf
 
-class TestLosses(tf.test.TestCase):
+class TestMetrics(tf.test.TestCase):
     def test_class_loss(self):
         anchor_logits = tf.convert_to_tensor(
             np.tile([[[-0.5, 0.2]]], [2, 8, 1]).astype('float32'))
@@ -39,3 +39,29 @@ class TestLosses(tf.test.TestCase):
             sess.run(tf.global_variables_initializer())
             loss_result = sess.run(loss)
             self.assertAlmostEqual(loss_result, total_loss)
+
+    def test_F1_score(self):
+        det_classes = tf.convert_to_tensor(
+            np.array([[10, 6, 10], [3, -1, -1]]).astype('int32')) 
+        det_bboxes = tf.convert_to_tensor(
+            np.array([[[0.08, 0.08, 0.38, 0.38], 
+                       [0.11, 0.11, 0.41, 0.41],
+                       [0.12, 0.12, 0.42, 0.42]],
+                      [[0.25, 0.25, 0.75, 0.75],
+                       [0, 0, 0, 0],
+                       [0, 0, 0, 0]]]).astype('float32'))
+        true_classes = tf.convert_to_tensor(
+            np.array([[10, 4], [3, -1]]).astype('int32'))
+        true_bboxes = tf.convert_to_tensor(
+            np.array([[[0.1, 0.1, 0.4, 0.4], 
+                       [0.6, 0.5, 0.7, 0.6]],
+                      [[0.2, 0.2, 0.7, 0.7],
+                       [0, 0, 0, 0]]]).astype('float32'))
+
+        expected_f1 = 0.7
+
+        f1 = f1_score(det_classes, det_bboxes, true_classes, true_bboxes)
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            f1_result = sess.run(f1)
+            self.assertAlmostEqual(f1_result, expected_f1)

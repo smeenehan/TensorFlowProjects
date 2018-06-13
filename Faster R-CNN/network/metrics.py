@@ -1,3 +1,4 @@
+from network.utils import bbox_overlap, remove_zero_padding
 import tensorflow as tf
 
 def bbox_loss(deltas, labels, target_deltas):
@@ -54,3 +55,54 @@ def class_loss(logits, labels):
     relevant_labels = tf.gather_nd(labels, relevant_indices)
     return tf.losses.sparse_softmax_cross_entropy(labels=relevant_labels, 
                                                   logits=relevant_logits)
+
+def f1_score(classes, bboxes, true_classes, true_bboxes):
+    """Compute F1 score (geometric mean of precision/recall) for a given set of
+    detections and ground-truths.
+
+    Note that all the input tensors may be zero-padded to allow batching.
+
+    Parameters
+    ----------
+    classes : tensor
+        Class IDs for all detections, [N, num_detect]
+    bboxes : tensor
+        Bounding boxes for all detections, [N, num_detect, (y1, x1, y2, x2)]
+    true_classes : tensor
+        Ground-truth class IDs, [N, num_truth]
+    true_bboxes : tensor
+        Ground-truth bounding boxes, [N, num_truth, (y1, x1, y2, x2)]
+    Returns
+    -------
+    tensor
+        Mean per-image F1 score over the batch.
+    """
+    f1_scores = tf.map_fn(_f1_per_image, 
+        [classes, bboxes, true_classes, true_bboxes], dtype=tf.float32)
+    return tf.reduce_mean(f1_scores)
+
+def _f1_per_image(input_data):
+    classes, bboxes, true_classes, true_bboxes = input_data
+
+    bboxes, non_zero = remove_zero_padding(bboxes)
+    classes = tf.boolean_mask(classes, non_zero)
+    true_bboxes, true_non_zero = remove_zero_padding(true_bboxes)
+    true_classes = tf.boolean_mask(true_classes, true_non_zero)
+
+    detect_count = tf.shape(bboxes)[0]
+    truth_count = tf.shape(true_bboxes)[0]
+
+    overlaps = bbox_overlap(bboxes, true_bboxes)
+    good_boxes = overlaps > 0.5
+
+    classes_tile = tf.tile(classes[:, None], [1, truth_count])
+    true_classes_tile = tf.tile(true_classes[None, :], [detect_count, 1])
+    good_classes = tf.equal(classes_tile, true_classes_tile)
+
+    good_detections = good_boxes & good_classes
+
+    # Only count one "good" detection per object as a true positive
+    num_positives = tf.reduce_sum(tf.cast(good_detections, tf.int32), axis=0)
+    at_least_one_positive = num_positives > 0
+    true_positives = tf.reduce_sum(tf.cast(at_least_one_positive, tf.int32))
+    return tf.cast(2*true_positives/(truth_count+detect_count), tf.float32)
