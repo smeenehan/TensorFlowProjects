@@ -64,4 +64,4 @@ class TestMetrics(tf.test.TestCase):
         with self.test_session() as sess:
             sess.run(tf.global_variables_initializer())
             f1_result = sess.run(f1)
-            self.assertAlmostEqual(f1_result, expected_f1)
+            self.assertAlmostEqual(np.mean(f1_result), expected_f1)

@@ -49,9 +49,10 @@ def model_fn(features, labels, mode, params, config):
     loss = setup_loss(outputs)
 
     if mode is tf.estimator.ModeKeys.EVAL:
-        with tf.name_scope('compute_f1_score'):
-            f1_value = f1_score(classes, bboxes, true_classes, true_bboxes)
-        accuracy = tf.summary.scalar('f1_score', f1_value)
+        with tf.name_scope('compute_f1_scores'):
+            f1_values = f1_score(classes, bboxes, true_classes, true_bboxes)
+        accuracy = tf.metrics.mean(f1_values)
+        tf.summary.scalar('accuracy', accuracy[1])
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss,
                                           eval_metric_ops={'accuracy': accuracy})
 

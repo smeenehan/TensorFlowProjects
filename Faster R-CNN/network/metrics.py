@@ -75,11 +75,11 @@ def f1_score(classes, bboxes, true_classes, true_bboxes):
     Returns
     -------
     tensor
-        Mean per-image F1 score over the batch.
+        F1 scores for each image in the batch.
     """
     f1_scores = tf.map_fn(_f1_per_image, 
         [classes, bboxes, true_classes, true_bboxes], dtype=tf.float32)
-    return tf.reduce_mean(f1_scores)
+    return f1_scores
 
 def _f1_per_image(input_data):
     classes, bboxes, true_classes, true_bboxes = input_data
