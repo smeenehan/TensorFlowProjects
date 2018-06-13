@@ -49,7 +49,7 @@ def main():
 
     with tf.python_io.TFRecordWriter(out_file) as writer:
         for img_path, ann_path in zip(image_paths, annotation_paths):
-            example, num_obj = _get_example(img_path, ann_path)
+            example = _get_example(img_path, ann_path)
             writer.write(example.SerializeToString())
 
 if __name__ == '__main__':
