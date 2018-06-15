@@ -58,20 +58,26 @@ def model_fn(features, labels, mode, params, config):
 
     init_backbone(params)
 
-    learning_rate = params.get('learning_rate', 0.001)
+    optim_type = params.get('optim_type', 'Momentum')
+    learning_rate = params.get('learning_rate', 0.0001)
     momentum = params.get('momentum', 0.9)
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     global_step = tf.train.get_or_create_global_step()
     with tf.name_scope('train'):
-        if isinstance(learning_rate, list):
-            boundaries = learning_rate[0]
-            values = learning_rate[1]
-            learn_rate = tf.train.piecewise_constant(
-                global_step, boundaries, values)
+        if optim_type is 'Adam':
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        elif optim_type is 'Momentum':
+            if isinstance(learning_rate, list):
+                boundaries = learning_rate[0]
+                values = learning_rate[1]
+                learn_rate = tf.train.piecewise_constant(
+                    global_step, boundaries, values)
+            else:
+                learn_rate = learning_rate
+                optimizer = tf.train.MomentumOptimizer(
+                    learning_rate=learn_rate, momentum=momentum, use_nesterov=True)
         else:
-            learn_rate = learning_rate
-        optimizer = tf.train.MomentumOptimizer(
-            learning_rate=learn_rate, momentum=momentum, use_nesterov=True)
+            raise ValueError('Unrecognized optimizer type:', optim_type)
 
         with tf.control_dependencies(extra_update_ops):
             train_op = optimizer.minimize(loss, global_step)
@@ -114,8 +120,11 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
         for the two stages. In prediction mode, contains the key 'detect', which
         returns the filtered detections from the ROI classifier stage.
     """
-    reg_scale = params.get('reg_scale', 0.0005)
-    regularizer = tf.keras.regularizers.l2(l=reg_scale)
+    reg_scale = params.get('reg_scale', None)
+    if reg_scale is None:
+        regularizer = None
+    else:
+        regularizer = tf.keras.regularizers.l2(l=reg_scale)
 
     backbone = ResNet('channels_last', num_blocks=[3, 4, 6, 3], include_fc=False,
                       regularizer=regularizer)
@@ -132,7 +141,6 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
 
     with tf.name_scope('anchor_gen'):
         anchors = generate_anchors(
-            anchor_scales, anchor_ratios, tf.shape(images)[1:3], 
             tf.shape(feature_maps)[1:3], anchor_stride)
         anchors = tf.tile(tf.expand_dims(anchors, 0), [tf.shape(images)[0], 1, 1])
 
@@ -173,6 +181,8 @@ def setup_loss(outputs):
         rpn_class_loss = class_loss(rpn_logits, rpn_target_classes)
         rpn_bbox_loss = bbox_loss(rpn_deltas, rpn_target_classes, rpn_target_deltas)
         rpn_loss = rpn_class_loss+10*rpn_bbox_loss
+    tf.summary.scalar('rpn_class_loss', rpn_class_loss)
+    tf.summary.scalar('rpn_bbox_loss', rpn_bbox_loss)
     tf.summary.scalar('rpn_loss', rpn_loss)
 
     roi_targets, roi_logits, roi_deltas = outputs['roi']
@@ -192,6 +202,8 @@ def setup_loss(outputs):
         roi_bbox_loss = bbox_loss(reduced_roi_deltas, roi_target_classes, 
                                   roi_target_deltas)
         roi_loss = roi_class_loss+10*roi_bbox_loss
+    tf.summary.scalar('roi_class_loss', roi_class_loss)
+    tf.summary.scalar('roi_bbox_loss', roi_bbox_loss)
     tf.summary.scalar('roi_loss', roi_loss)
 
     with tf.name_scope('compute_total_loss'):

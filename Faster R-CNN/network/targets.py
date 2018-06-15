@@ -120,8 +120,8 @@ class DetectionTargetLayer(tf.keras.Model):
         Threshold (in terms of IoU) determining whether an ROI overlaps enough with
         a ground-truth box to count as positive. Defaults to 0.7.
     """
-    def __init__(self, num_train_roi=256, fraction_pos_roi=0.5, 
-                 truth_overlap_thresh=0.7):
+    def __init__(self, num_train_roi=256, fraction_pos_roi=0.25, 
+                 truth_overlap_thresh=0.5):
         super().__init__()
         self.num_train_roi = num_train_roi
         self.fraction_pos_roi = fraction_pos_roi
