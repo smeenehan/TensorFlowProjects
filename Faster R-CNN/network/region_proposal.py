@@ -89,7 +89,7 @@ class ProposalLayer(tf.keras.Model):
         Threshold for deciding if proposals overlap (with respect to the IoU
         metric), during the non-max suppression stage. Defaults to 0.7.
     """
-    def __init__(self, num_proposals=500, overlap_thresh=0.7):
+    def __init__(self, num_proposals=2000, overlap_thresh=0.7):
         super().__init__()
         self.num_proposals = num_proposals
         self.overlap_thresh = overlap_thresh

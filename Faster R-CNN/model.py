@@ -58,7 +58,7 @@ def model_fn(features, labels, mode, params, config):
 
     init_backbone(params)
 
-    learning_rate = params.get('learning_rate', 0.01)
+    learning_rate = params.get('learning_rate', 0.001)
     momentum = params.get('momentum', 0.9)
     extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     global_step = tf.train.get_or_create_global_step()
@@ -122,7 +122,7 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
     feature_maps = backbone(images, training=training)
 
     anchor_stride = params.get('anchor_stride', 1)
-    anchor_scales = params.get('anchor_scales', [32, 64, 128])
+    anchor_scales = params.get('anchor_scales', [64, 128, 256])
     anchor_ratios = params.get('anchor_ratios', [0.5, 1.0, 1.5])
     num_anchors = len(anchor_scales)*len(anchor_ratios)
     rpn_graph = RPN('channels_last', anchors_per_loc=num_anchors, 

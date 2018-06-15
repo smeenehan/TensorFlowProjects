@@ -1,4 +1,5 @@
 from network.utils import bbox_overlap, compute_bbox_deltas, remove_zero_padding
+from network.utils import strip_out_of_bounds_anchors
 import tensorflow as tf
 
 class RPNTargetLayer(tf.keras.Model):
@@ -14,9 +15,9 @@ class RPNTargetLayer(tf.keras.Model):
     Parameters
     ----------
     num_train_anchors : int
-        Maximum number of training samples in a single image. Defaults to  64.
+        Maximum number of training samples in a single image. Defaults to 64.
     """
-    def __init__(self, num_train_anchors=64):
+    def __init__(self, num_train_anchors=256):
         super().__init__()
         self.num_train_anchors = num_train_anchors
 
@@ -43,6 +44,7 @@ class RPNTargetLayer(tf.keras.Model):
 
     def _get_targets(self, input_data):
         anchors, true_bboxes = input_data
+        anchors = strip_out_of_bounds_anchors(anchors)
         overlaps = bbox_overlap(anchors, true_bboxes)
         target_classes = self._get_target_classes(overlaps)
         target_classes = self._subsample_anchors(target_classes)

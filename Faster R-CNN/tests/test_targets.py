@@ -66,6 +66,28 @@ class TestRPNTargets(tf.test.TestCase):
             self.assertEqual(num_tot_train, self.num_train_anchors)
             self.assertEqual(num_pos_train, num_tot_train//2)
 
+    def test_out_of_bounds_anchors(self):
+        oob_anchors = np.array([[[-0.56, 0.2, 0.4, 0.41],
+                                 [0.75, 0.1, 1.3, 0.4], 
+                                 [0.15, -0.4, 0.21, 0.21],
+                                 [0.19, 0.21, 0.41, 1.02]]]).astype('float32')
+        good_anchors = np.array([[[0.16, 0.2, 0.4, 0.41],
+                                  [0.75, 0.1, 0.93, 0.4], 
+                                  [0.15, 0.14, 0.21, 0.21],
+                                  [0.19, 0.21, 0.41, 0.72]]]).astype('float32')
+        all_anchors = np.concatenate([oob_anchors, good_anchors], axis=1)
+        anchors = tf.convert_to_tensor(all_anchors)
+        true_boxes = tf.convert_to_tensor(
+            np.array([[[0.2, 0.2, 0.4, 0.4]]]).astype('float32'))
+
+        target_run = self.rpn([anchors, true_boxes])
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            [target_classes, target_deltas] = sess.run(target_run)
+            self.assertAllEqual(target_classes.shape, [1, 4])
+            self.assertAllEqual(target_deltas.shape, [1, 4, 4])
+
+
 
 class TestDetectionTargets(tf.test.TestCase):
     def setUp(self):

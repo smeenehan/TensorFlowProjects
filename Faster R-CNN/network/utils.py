@@ -167,3 +167,20 @@ def compute_bbox_deltas(init, target):
     dw = tf.log(target_width/init_width)
 
     return tf.stack([dy, dx, dh, dw], axis=1)
+
+def strip_out_of_bounds_anchors(anchors):
+    """Remove anchors which exceed the bounds of the image. Necessary during
+    training for convergence reasons. 
+
+    Parameters
+    ----------
+    anchors : tensor
+        Set of anchors, [num_anchors, (y1, x1, y2, x2)]
+    Returns
+    -------
+    tensor
+        Subset of anchors, [num_remaining, (y1, x1, y2, x2)]
+    """
+    good_indices = tf.where((anchors[:, 0]>=0) & (anchors[:, 1]>=0) &
+                            (anchors[:, 2]<=1) & (anchors[:, 3]<=1))[:, 0]
+    return tf.gather(anchors, good_indices)
