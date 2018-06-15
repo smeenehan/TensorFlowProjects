@@ -66,7 +66,7 @@ class TestProposalLayer(tf.test.TestCase):
     def test_shift(self):
         probs = tf.convert_to_tensor(np.array([[[0, 1]]]).astype('float32'))
         deltas = tf.convert_to_tensor(
-            np.array([[[0.05, -0.12, np.log(1.2), np.log(0.75)]]]).astype('float32'))
+            np.array([[[0.5, -1.2, 5*np.log(1.2), 5*np.log(0.75)]]]).astype('float32'))
         init_anchors = tf.convert_to_tensor(
             np.array([[[0.1, 0.23, 0.45, 0.75]]]).astype('float32'))
         expected_anchor = np.array([0.0825, 0.2326, 0.5025, 0.6226])

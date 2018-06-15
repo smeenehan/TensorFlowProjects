@@ -38,16 +38,16 @@ class TestRPNTargets(tf.test.TestCase):
         expect_classes = np.array([[1, -1, 0, 1, 1]])
 
         expect_deltas = np.zeros((1, 5, 4))
-        expect_deltas[0, 0, :] = [0, 0, 0.105361, -0.095310]
-        expect_deltas[0, 3, :] = [0, 0, -0.095310, 0.105361]
-        expect_deltas[0, 4, :] = [0, -0.416667, 0.105361, 0.510826]
+        expect_deltas[0, 0, :] = [0, 0, 5*0.105361, -5*0.095310]
+        expect_deltas[0, 3, :] = [0, 0, -5*0.095310, 5*0.105361]
+        expect_deltas[0, 4, :] = [0, -4.16667, 5*0.105361, 5*0.510826]
 
         target_run = self.rpn([anchors, true_boxes])
         with self.test_session() as sess:
             sess.run(tf.global_variables_initializer())
             [target_classes, target_deltas] = sess.run(target_run)
             self.assertAllClose(target_classes, expect_classes)
-            self.assertAllClose(target_deltas, expect_deltas)
+            self.assertAllClose(target_deltas, expect_deltas, atol=1e-5)
 
     def test_rpn_fractions(self):
         pos_anchors = np.tile([[0.21, 0.19, 0.39, 0.41]], [3*self.num_train_anchors, 1])
@@ -131,7 +131,7 @@ class TestDetectionTargets(tf.test.TestCase):
         expect_classes[0, 1] = 0
 
         expect_deltas = np.zeros((1, self.num_train_roi, 4))
-        expect_deltas[0, 0, :] = [0.205882, 0.0217391, 0.162519, -0.139762]
+        expect_deltas[0, 0, :] = [2.05882, 0.217391, 5*0.162519, -5*0.139762]
 
         target_run = self.det([input_roi, true_classes, true_boxes])
         with self.test_session() as sess:
@@ -139,7 +139,7 @@ class TestDetectionTargets(tf.test.TestCase):
             [output_roi, target_classes, target_deltas] = sess.run(target_run)
             self.assertAllClose(output_roi, expect_roi)
             self.assertAllClose(target_classes, expect_classes)
-            self.assertAllClose(target_deltas, expect_deltas)
+            self.assertAllClose(target_deltas, expect_deltas, atol=1e-5)
 
     def test_detection_fractions(self):
         pos_roi = np.tile([[0.21, 0.19, 0.39, 0.41]], [3*self.num_train_roi, 1])
@@ -178,8 +178,8 @@ class TestDetectionTargets(tf.test.TestCase):
         expect_classes[0, 1] = 3
 
         expect_deltas = np.zeros((1, self.num_train_roi, 4))
-        expect_deltas[0, 0, :] = [-0.5, -0.5, -0.693147, 0]
-        expect_deltas[0, 1, :] = [0.5, 0.5, -0.693147, -1.098612]
+        expect_deltas[0, 0, :] = [-5, -5, -5*0.693147, 0]
+        expect_deltas[0, 1, :] = [5, 5, -5*0.693147, -5*1.098612]
 
         target_run = self.det([input_roi, true_classes, true_boxes])
         with self.test_session() as sess:
@@ -188,4 +188,4 @@ class TestDetectionTargets(tf.test.TestCase):
             sort_inds = np.flipud(np.argsort(target_classes[0, :]))
             self.assertAllClose(output_roi[:, sort_inds, :], expect_roi)
             self.assertAllClose(target_classes[:, sort_inds], expect_classes)
-            self.assertAllClose(target_deltas[:, sort_inds, :], expect_deltas)
+            self.assertAllClose(target_deltas[:, sort_inds, :], expect_deltas, atol=1e-5)

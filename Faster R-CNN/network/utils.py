@@ -2,6 +2,9 @@ from math import ceil
 import numpy as np
 import tensorflow as tf
 
+# Normalization factors for bounding box refinements
+BBOX_STD_DEV = np.array([[0.1, 0.1, 0.2, 0.2]], dtype=np.float32)
+
 def generate_anchors(scales, ratios, image_shape, feature_shape, anchor_stride):
     """Generate all anchors (fixed initial bounding box guesses) for a given 
     image and feature map.
@@ -65,6 +68,8 @@ def update_bboxes(boxes, deltas):
         Updated bounding boxes, in normalized coordinates, 
         [num_boxes, (y1, x1, y2, x2)]
     """
+    deltas = deltas*tf.tile(BBOX_STD_DEV, [tf.shape(deltas)[0], 1])
+
     height = boxes[:, 2]-boxes[:, 0]
     center_y = boxes[:, 0]+0.5*height
     width = boxes[:, 3]-boxes[:, 1]
@@ -84,6 +89,8 @@ def update_bboxes(boxes, deltas):
 def update_bboxes_batch(boxes, deltas):
     """Apply bounding box refinements to a whole batch.
     """
+    deltas = deltas*tf.tile(BBOX_STD_DEV[None, :], [tf.shape(deltas)[:2], 1])
+
     height = boxes[:, :, 2]-boxes[:, :, 0]
     center_y = boxes[:, :, 0]+0.5*height
     width = boxes[:, :, 3]-boxes[:, :, 1]
@@ -143,9 +150,9 @@ def compute_bbox_deltas(init, target):
     Parameters
     ----------
     init : tensor
-        First set of bounding boxes, [N_1, (y1, x1, y2, x2)]
+        First set of bounding boxes, [N, (y1, x1, y2, x2)]
     target : tensor
-        Second set of bounding boxes, [N_2, (y1, x1, y2, x2)]
+        Second set of bounding boxes, [N, (y1, x1, y2, x2)]
     Returns
     -------
     tensor
@@ -166,7 +173,8 @@ def compute_bbox_deltas(init, target):
     dh = tf.log(target_height/init_height)
     dw = tf.log(target_width/init_width)
 
-    return tf.stack([dy, dx, dh, dw], axis=1)
+    return tf.stack([dy, dx, dh, dw], axis=1) \
+          /tf.tile(BBOX_STD_DEV, [tf.shape(dy)[0], 1])
 
 def strip_out_of_bounds_anchors(anchors):
     """Remove anchors which exceed the bounds of the image. Necessary during

@@ -37,8 +37,8 @@ class TestUtils(tf.test.TestCase):
         init_boxes = np.tile(np.array([[0.25, 0.25, 0.75, 0.75]]), (3, 1)).astype('float32')
         init_boxes_tens = tf.convert_to_tensor(init_boxes)
         deltas = np.array([[0, 0, 0, 0], 
-                           [-0.9, -1.2, np.log(0.5), np.log(0.6)], 
-                           [1.4, 0.8, np.log(1.1), np.log(2.3)]]).astype('float32')
+                           [-9, -12, 5*np.log(0.5), 5*np.log(0.6)], 
+                           [14, 8, 5*np.log(1.1), 5*np.log(2.3)]]).astype('float32')
         deltas_tens = tf.convert_to_tensor(deltas)
         expected_bboxes = np.array([[0.25, 0.25, 0.75, 0.75], 
                                     [-0.075, -0.25, 0.175, 0.05], 
@@ -75,8 +75,8 @@ class TestUtils(tf.test.TestCase):
         target = tf.convert_to_tensor(
             np.array([[0.25, 0.25, 0.75, 0.75], 
                       [0.5, 0.5, 0.8, 0.8]]).astype('float32'))
-        expected_deltas = np.array([[1.5, 3.3, 0.693147, 1.609438], 
-                                    [-0.2, 1.125, -0.510826, -0.287683]])
+        expected_deltas = np.array([[15, 33, 3.465736, 8.04719], 
+                                    [-2, 11.25, -2.554128, -1.438410]])
 
         deltas = utils.compute_bbox_deltas(init, target)
         with self.test_session() as sess:
