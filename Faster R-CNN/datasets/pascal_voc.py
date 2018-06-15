@@ -29,7 +29,7 @@ def get_image_paths(root_path=DEFAULT_PASCAL_ROOT, set_type='merged'):
 
 def load_image_data(image_path, annotation_path):
     image = io.imread(image_path).astype('float32')
-    class_ids, bboxes = parse_annotation(annotation_path)
+    class_ids, class_labels, bboxes = parse_annotation(annotation_path)
     return image, class_ids, bboxes
 
 def parse_annotation(annotation_path):

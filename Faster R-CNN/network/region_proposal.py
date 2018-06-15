@@ -27,18 +27,21 @@ class RPN(tf.keras.Model):
     def __init__(self, data_format, num_channels=512, anchors_per_loc=9, 
                  anchor_stride=1, regularizer=None):
         super().__init__()
+        bn_axis = 1 if data_format is 'channels_first' else 3
+        self.bn_pre = tf.layers.BatchNormalization(axis=bn_axis, name='bn_pre')
         self.shared = tf.keras.layers.Conv2D(
             num_channels, 3, strides=anchor_stride, data_format=data_format, 
             use_bias=False, padding='same', name='shared', 
             kernel_regularizer=regularizer)
 
-        bn_axis = 1 if data_format is 'channels_first' else 3
-        self.bn = tf.layers.BatchNormalization(axis=bn_axis, name='bn')
+        self.bn_post = tf.layers.BatchNormalization(axis=bn_axis, name='bn_post')
 
         self.anchor_logits = tf.keras.layers.Conv2D(
-            2*anchors_per_loc, 1, use_bias=False, name='anchor_logits')
+            2*anchors_per_loc, 1, use_bias=False, name='anchor_logits',
+            kernel_regularizer=regularizer)
         self.anchor_boxes = tf.keras.layers.Conv2D(
-            4*anchors_per_loc, 1, use_bias=False, name='anchor_boxes')
+            4*anchors_per_loc, 1, use_bias=False, name='anchor_boxes',
+            kernel_regularizer=regularizer)
 
     def call(self, input_data, training=False):
         """
@@ -60,8 +63,10 @@ class RPN(tf.keras.Model):
             [N, num_anchors, (dy, dx, log(dh), log(dw))], respectively.
         """
         num_batch = tf.shape(input_data)[0]
-        x = self.shared(input_data)
-        x = self.bn(x, training=training)
+        x = self.bn_pre(input_data, training=training)
+        x = tf.nn.relu(x)
+        x = self.shared(x)
+        x = self.bn_post(x, training=training)
         x = tf.nn.relu(x)
 
         logits = self.anchor_logits(x)

@@ -62,10 +62,9 @@ class ResNet(tf.keras.Model):
                                             shortcut_activate=shortcut_activate,
                                             stride=stride, regularizer=regularizer))
 
-
-        bn_axis = 1 if data_format is 'channels_first' else 3
-        self.bn = tf.layers.BatchNormalization(axis=bn_axis, name='bn_final')
         if include_fc:
+            bn_axis = 1 if data_format is 'channels_first' else 3
+            self.bn = tf.layers.BatchNormalization(axis=bn_axis, name='bn_final')
             reduction_indices = [2, 3] if data_format is 'channels_first' else [1, 2]
             reduction_indices = tf.constant(reduction_indices)
             self.global_pool = functools.partial(tf.reduce_mean,
@@ -73,6 +72,7 @@ class ResNet(tf.keras.Model):
             self.fc = tf.keras.layers.Dense(classes, name='fc', 
                                             kernel_regularizer=regularizer)
         else:
+            self.bn = None
             self.global_pool = None
             self.fc = None
 
@@ -99,9 +99,9 @@ class ResNet(tf.keras.Model):
         for layer in self.layers[2:self.num_res+2]:
             x = layer(x, training=training)
 
-        x = self.bn(x, training=training)
-        x = tf.nn.relu(x)
         if self.fc is not None:
+            x = self.bn(x, training=training)
+            x = tf.nn.relu(x)
             x = self.global_pool(x)
             x = self.fc(tf.layers.flatten(x))
         return x
@@ -116,8 +116,6 @@ class ResBlock(tf.keras.Model):
     Note that M != N. If we specify a non-unity stride, M = N/stride, where 
     downsampling via strided convolution occurs on the 3x3 convolution and
     the shortcut path. Also note that for now we have a fixed relation C1 = C2/4.
-    
-    For the 
 
     Parameters
     ----------
@@ -186,3 +184,9 @@ class ResBlock(tf.keras.Model):
         else:
             shortcut = input_data
         return x+shortcut
+
+    def compute_output_shape(self, input_shape):
+        if self.shortcut_activate:
+            return self.conv0.compute_output_shape(input_shape)
+        else:
+            return input_shape

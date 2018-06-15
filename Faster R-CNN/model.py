@@ -5,7 +5,7 @@ from network.region_proposal import RPN, ProposalLayer
 from network.roi_classifier import ROIAlign, ROIHead, DetectionLayer
 from network.targets import RPNTargetLayer, DetectionTargetLayer
 from network.utils import generate_anchors, update_bboxes_batch
-from resnet_var_dict import resnet_var_dict
+from resnet_var_dict import resnet_C4_var_dict
 import tensorflow as tf
 
 def model_fn(features, labels, mode, params, config):
@@ -33,8 +33,8 @@ def model_fn(features, labels, mode, params, config):
     true_bboxes = labels['bboxes']
     training = mode is tf.estimator.ModeKeys.TRAIN
     predict = mode is tf.estimator.ModeKeys.PREDICT
-    outputs = build_network(images, true_classes, true_bboxes, params, training,
-                            predict)
+    outputs = build_network(images, true_classes, true_bboxes, params, 
+                            training, predict)
     if not training:
         detections = outputs['detect']
         bboxes = detections[:, :, :4]
@@ -58,30 +58,7 @@ def model_fn(features, labels, mode, params, config):
 
     init_backbone(params)
 
-    optim_type = params.get('optim_type', 'Momentum')
-    learning_rate = params.get('learning_rate', 0.0001)
-    momentum = params.get('momentum', 0.9)
-    extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    global_step = tf.train.get_or_create_global_step()
-    with tf.name_scope('train'):
-        if optim_type is 'Adam':
-            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-        elif optim_type is 'Momentum':
-            if isinstance(learning_rate, list):
-                boundaries = learning_rate[0]
-                values = learning_rate[1]
-                learn_rate = tf.train.piecewise_constant(
-                    global_step, boundaries, values)
-            else:
-                learn_rate = learning_rate
-                optimizer = tf.train.MomentumOptimizer(
-                    learning_rate=learn_rate, momentum=momentum, use_nesterov=True)
-        else:
-            raise ValueError('Unrecognized optimizer type:', optim_type)
-
-        with tf.control_dependencies(extra_update_ops):
-            train_op = optimizer.minimize(loss, global_step)
-
+    train_op = setup_training(loss, params)
     train_spec = tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
     # Use a custom checkpoint saver hook to avoid saving the graph definition 
@@ -126,8 +103,8 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
     else:
         regularizer = tf.keras.regularizers.l2(l=reg_scale)
 
-    backbone = ResNet('channels_last', num_blocks=[3, 4, 6, 3], include_fc=False,
-                      regularizer=regularizer)
+    backbone = ResNet('channels_last', num_blocks=[3, 4, 6], num_stages=3, 
+                      include_fc=False, regularizer=regularizer)
     feature_maps = backbone(images, training=training)
 
     anchor_stride = params.get('anchor_stride', 1)
@@ -141,6 +118,7 @@ def build_network(images, true_classes, true_bboxes, params, training, predict):
 
     with tf.name_scope('anchor_gen'):
         anchors = generate_anchors(
+            anchor_scales, anchor_ratios, tf.shape(images)[1:3], 
             tf.shape(feature_maps)[1:3], anchor_stride)
         anchors = tf.tile(tf.expand_dims(anchors, 0), [tf.shape(images)[0], 1, 1])
 
@@ -188,6 +166,7 @@ def setup_loss(outputs):
     roi_targets, roi_logits, roi_deltas = outputs['roi']
     roi_target_classes, roi_target_deltas = outputs['roi_targets']
     with tf.name_scope('reduce_roi_deltas'):
+        # Find the bounding box for the most likely class for each RoI target
         shape = tf.shape(roi_deltas)
         roi_ids = tf.argmax(roi_logits, axis=2, output_type=tf.int32)
         batch_inds = tf.tile(tf.range(shape[0])[:, None, None], [1, shape[1], shape[3]])
@@ -201,7 +180,7 @@ def setup_loss(outputs):
         roi_class_loss = class_loss(roi_logits, roi_target_classes)
         roi_bbox_loss = bbox_loss(reduced_roi_deltas, roi_target_classes, 
                                   roi_target_deltas)
-        roi_loss = roi_class_loss+10*roi_bbox_loss
+        roi_loss = roi_class_loss+roi_bbox_loss
     tf.summary.scalar('roi_class_loss', roi_class_loss)
     tf.summary.scalar('roi_bbox_loss', roi_bbox_loss)
     tf.summary.scalar('roi_loss', roi_loss)
@@ -211,14 +190,35 @@ def setup_loss(outputs):
     tf.summary.scalar('total_loss', total_loss)
     return total_loss
 
-def init_backbone(params, backbone_name='res_net'):
+def init_backbone(params):
     backbone_ckpt = params.get('backbone_ckpt', None)
     if backbone_ckpt is None:
         return
-    backbone_var_dict = {}
-    for key, item in resnet_var_dict.items():
-        if 'dense' in key:
-            continue
-        new_item = item.replace('res_net', backbone_name)
-        backbone_var_dict[key] = new_item
+    backbone_var_dict = resnet_C4_var_dict
     tf.train.init_from_checkpoint(backbone_ckpt, backbone_var_dict)
+
+def setup_training(loss, params):
+    optim_type = params.get('optim_type', 'Momentum')
+    learning_rate = params.get('learning_rate', 0.0001)
+    momentum = params.get('momentum', 0.9)
+    extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    global_step = tf.train.get_or_create_global_step()
+    with tf.name_scope('train'):
+        if optim_type is 'Adam':
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        elif optim_type is 'Momentum':
+            if isinstance(learning_rate, list):
+                boundaries = learning_rate[0]
+                values = learning_rate[1]
+                learn_rate = tf.train.piecewise_constant(
+                    global_step, boundaries, values)
+            else:
+                learn_rate = learning_rate
+                optimizer = tf.train.MomentumOptimizer(
+                    learning_rate=learn_rate, momentum=momentum, use_nesterov=True)
+        else:
+            raise ValueError('Unrecognized optimizer type:', optim_type)
+
+        with tf.control_dependencies(extra_update_ops):
+            train_op = optimizer.minimize(loss, global_step)
+    return train_op
